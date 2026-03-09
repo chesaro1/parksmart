@@ -501,7 +501,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
     try {
       const { booking } = await bookingsApi.create({ spotId:spot.id, hours:parseFloat(hours.toFixed(2)), vehiclePlate:plate.trim(), startTime, endTime });
       await paymentsApi.stkPush({ phone:phone.trim(), amount:booking.total_amount, bookingId:booking.id });
-      setTimeout(() => onSuccess({ ...booking, startTime, endTime }), 3500);
+      setTimeout(() => onSuccess({ ...booking, startTime, endTime, spot_lat: spot.lat, spot_lng: spot.lng }), 3500);
     } catch(e) {
       setError(e.response?.data?.error || "Booking failed. Please try again.");
       setStep("form");
@@ -609,6 +609,22 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
 // ─── SUCCESS SCREEN ───────────────────────────────────────────────────────────
 function SuccessScreen({ booking, onDone }) {
   const C = useTheme();
+  const lat = booking.spot_lat || booking.spotLat;
+  const lng = booking.spot_lng || booking.spotLng;
+  const spotName = booking.spot_name || booking.spotName || "Destination";
+
+  const openGoogleMaps = () => {
+    const url = lat && lng
+      ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(spotName)}`;
+    window.open(url, "_blank");
+  };
+
+  const openWaze = () => {
+    if (lat && lng) window.open(`https://waze.com/ul?ll=${lat},${lng}&navigate=yes`, "_blank");
+    else window.open(`https://waze.com/ul?q=${encodeURIComponent(spotName)}&navigate=yes`, "_blank");
+  };
+
   return (
     <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",padding:24,textAlign:"center"}}>
       <div className="pop-in" style={{width:78,height:78,borderRadius:"50%",background:`linear-gradient(135deg,${C.accent},${C.mode==="dark"?"#00C488":"#00966A"})`,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:18,boxShadow:`0 0 30px ${C.accent}60`}}>
@@ -616,21 +632,37 @@ function SuccessScreen({ booking, onDone }) {
       </div>
       <div style={{fontSize:24,fontWeight:800,color:C.text,marginBottom:6}}>Spot Reserved!</div>
       <div style={{fontSize:14,color:C.muted,marginBottom:24}}>Check your phone for M-Pesa confirmation</div>
-      <Card style={{width:"100%",marginBottom:20}}>
+
+      <Card style={{width:"100%",marginBottom:16}}>
         {[
           ["Booking ID", booking.id],
-          ["Location", booking.spot_name||booking.spotName],
+          ["Location", spotName],
           ["Vehicle", booking.vehicle_plate||booking.vehiclePlate],
           ["Duration", `${booking.hours} hour${booking.hours>1?"s":""}`],
           ["Total Paid", `KES ${(booking.total_amount||0).toLocaleString()}`],
         ].map(([k,v])=>(
           <div key={k} style={{display:"flex",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${C.border}`}}>
             <span style={{fontSize:13,color:C.muted}}>{k}</span>
-            <span style={{fontSize:13,fontWeight:700,color:C.text}}>{v}</span>
+            <span style={{fontSize:13,fontWeight:700,color:C.text,maxWidth:"55%",textAlign:"right",wordBreak:"break-word"}}>{v}</span>
           </div>
         ))}
       </Card>
-      <Btn variant="outline" onClick={onDone}>Back to Explore</Btn>
+
+      {/* Navigate now — primary actions */}
+      <div style={{width:"100%",marginBottom:10}}>
+        <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:0.8,marginBottom:10,textAlign:"left"}}>Navigate to Parking</div>
+        <button onClick={openGoogleMaps} style={{width:"100%",padding:"13px",borderRadius:12,border:`1.5px solid ${C.blue}`,background:`${C.blue}15`,color:C.blue,fontSize:15,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:9,marginBottom:8}}>
+          <Icon name="map" size={18} color={C.blue}/>Open in Google Maps
+        </button>
+        <button onClick={openWaze} style={{width:"100%",padding:"13px",borderRadius:12,border:`1.5px solid ${C.accent}`,background:C.accentSoft,color:C.accent,fontSize:15,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:9}}>
+          <Icon name="route" size={18} color={C.accent}/>Open in Waze
+        </button>
+      </div>
+
+      {/* Secondary — back to explore */}
+      <button onClick={onDone} style={{background:"none",border:"none",color:C.muted,fontSize:13,cursor:"pointer",marginTop:4,textDecoration:"underline"}}>
+        Back to Explore
+      </button>
     </div>
   );
 }
