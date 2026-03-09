@@ -136,59 +136,223 @@ function AuthScreen({ onAuth }) {
   );
 }
 
+// ─── LEAFLET MAP (injected once) ─────────────────────────────────────────────
+let leafletLoaded = false;
+function loadLeaflet() {
+  if (leafletLoaded || document.getElementById("leaflet-css")) return Promise.resolve();
+  leafletLoaded = true;
+  return new Promise(resolve => {
+    const css = document.createElement("link");
+    css.id = "leaflet-css";
+    css.rel = "stylesheet";
+    css.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
+    document.head.appendChild(css);
+    const js = document.createElement("script");
+    js.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
+    js.onload = resolve;
+    document.head.appendChild(js);
+  });
+}
+
 // ─── MAP VIEW ─────────────────────────────────────────────────────────────────
-function MapView({ spots, selected, onSelect }) {
-  const toX = (lng) => Math.max(3, Math.min(97, ((lng-36.70)/0.22)*100));
-  const toY = (lat) => Math.max(3, Math.min(97, ((-1.18-lat)/(-0.20))*100));
+function MapView({ spots, selected, onSelect, userLocation, directions, onDirections }) {
+  const mapRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const markersRef = useRef({});
+  const routeLayerRef = useRef(null);
+  const userMarkerRef = useRef(null);
+  const [ready, setReady] = useState(!!window.L);
+
+  // Load Leaflet once
+  useEffect(() => {
+    if (window.L) { setReady(true); return; }
+    loadLeaflet().then(() => setReady(true));
+  }, []);
+
+  // Init map
+  useEffect(() => {
+    if (!ready || !mapRef.current || mapInstanceRef.current) return;
+    const L = window.L;
+    const map = L.map(mapRef.current, {
+      center: [-1.286389, 36.817223],
+      zoom: 13,
+      zoomControl: false,
+      attributionControl: false,
+    });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+    }).addTo(map);
+    L.control.zoom({ position: "bottomright" }).addTo(map);
+    mapInstanceRef.current = map;
+  }, [ready]);
+
+  // Add/update spot markers
+  useEffect(() => {
+    if (!ready || !mapInstanceRef.current) return;
+    const L = window.L;
+    const map = mapInstanceRef.current;
+
+    spots.forEach(s => {
+      if (!s.lat || !s.lng) return;
+      const avail = s.available_spaces ?? 0;
+      const color = avail === 0 ? "#FF4D6D" : avail <= 5 ? "#FFB800" : "#00E5A0";
+      const isSel = selected?.id === s.id;
+
+      const icon = L.divIcon({
+        className: "",
+        html: `<div style="
+          width:${isSel?44:28}px;height:${isSel?44:28}px;
+          background:${isSel?"#00E5A0":color+"22"};
+          border:2.5px solid ${color};
+          border-radius:${isSel?"10px":"50%"};
+          display:flex;align-items:center;justify-content:center;
+          box-shadow:0 0 ${isSel?14:6}px ${color}60;
+          transition:all 0.2s;
+          font-size:${isSel?11:9}px;font-weight:800;
+          color:${isSel?"#0A0F1E":color};
+          white-space:nowrap;overflow:hidden;padding:0 4px;
+        ">${isSel?`KES ${s.price_per_hour}`:"P"}</div>`,
+        iconSize: [isSel?44:28, isSel?44:28],
+        iconAnchor: [isSel?22:14, isSel?22:14],
+      });
+
+      if (markersRef.current[s.id]) {
+        markersRef.current[s.id].setIcon(icon);
+      } else {
+        const m = L.marker([s.lat, s.lng], { icon })
+          .addTo(map)
+          .on("click", () => onSelect(s));
+        markersRef.current[s.id] = m;
+      }
+    });
+  }, [ready, spots, selected]);
+
+  // Pan to selected spot
+  useEffect(() => {
+    if (!ready || !mapInstanceRef.current || !selected) return;
+    mapInstanceRef.current.flyTo([selected.lat, selected.lng], 16, { duration: 0.8 });
+  }, [ready, selected]);
+
+  // Show user location
+  useEffect(() => {
+    if (!ready || !mapInstanceRef.current || !userLocation) return;
+    const L = window.L;
+    const icon = L.divIcon({
+      className: "",
+      html: `<div style="width:14px;height:14px;background:#4DA6FF;border:3px solid white;border-radius:50%;box-shadow:0 0 12px #4DA6FF80;"></div>`,
+      iconSize: [14, 14], iconAnchor: [7, 7],
+    });
+    if (userMarkerRef.current) userMarkerRef.current.setLatLng(userLocation);
+    else userMarkerRef.current = L.marker(userLocation, { icon, zIndexOffset: 1000 }).addTo(mapInstanceRef.current);
+  }, [ready, userLocation]);
+
+  // Draw OSRM route
+  useEffect(() => {
+    if (!ready || !mapInstanceRef.current) return;
+    const L = window.L;
+    const map = mapInstanceRef.current;
+    if (routeLayerRef.current) { map.removeLayer(routeLayerRef.current); routeLayerRef.current = null; }
+    if (!directions?.route) return;
+    routeLayerRef.current = L.polyline(directions.route, {
+      color: "#4DA6FF", weight: 5, opacity: 0.85, dashArray: "8,4",
+    }).addTo(map);
+    map.fitBounds(routeLayerRef.current.getBounds(), { padding: [30, 30] });
+  }, [ready, directions]);
 
   return (
-    <div style={{position:"relative",width:"100%",height:220,background:"linear-gradient(135deg,#0D1B2A,#0A2540)",borderRadius:18,overflow:"hidden",border:`1px solid ${C.border}`,marginBottom:10}}>
-      <svg style={{position:"absolute",inset:0,width:"100%",height:"100%"}}>
-        <path d="M 0 110 Q 200 100 400 110 T 700 105" stroke="#1E5A4025" strokeWidth="12" fill="none"/>
-        <path d="M 240 0 Q 245 110 240 220" stroke="#1E5A4025" strokeWidth="8" fill="none"/>
-        <path d="M 0 65 Q 300 70 600 55" stroke="#1E5A4018" strokeWidth="4" fill="none"/>
-        <path d="M 0 168 Q 350 163 700 173" stroke="#1E5A4018" strokeWidth="4" fill="none"/>
-      </svg>
-      {spots.map(s => {
-        const x = toX(s.lng), y = toY(s.lat);
-        const sel = selected?.id === s.id;
-        const avail = s.available_spaces ?? 0;
-        const dc = avail===0 ? C.danger : avail<=5 ? C.warn : C.accent;
-        return (
-          <button key={s.id} onClick={()=>onSelect(s)} style={{
-            position:"absolute", left:`${x}%`, top:`${y}%`, transform:"translate(-50%,-50%)",
-            background:sel?C.accent:C.card, border:`2px solid ${sel?C.accent:dc}`,
-            borderRadius:sel?8:"50%", padding:sel?"2px 7px":"5px",
-            cursor:"pointer", zIndex:sel?10:5, transition:"all 0.2s",
-            boxShadow:sel?`0 0 12px ${C.accent}60`:`0 0 4px ${dc}40`,
-          }}>
-            {sel
-              ? <span style={{fontSize:9,fontWeight:800,color:C.bg,whiteSpace:"nowrap"}}>KES {s.price_per_hour}/hr</span>
-              : <div style={{position:"relative",width:8,height:8}}>
-                  <div className="pulse-ring" style={{position:"absolute",inset:0,borderRadius:"50%",background:dc,opacity:0.35}}/>
-                  <div style={{position:"absolute",inset:2,borderRadius:"50%",background:dc}}/>
-                </div>
-            }
-          </button>
-        );
-      })}
-      <div style={{position:"absolute",left:"50%",top:"50%",transform:"translate(-50%,-50%)",width:12,height:12,borderRadius:"50%",background:C.blue,border:"3px solid white",boxShadow:`0 0 14px ${C.blue}80`}}/>
-      <div style={{position:"absolute",top:8,left:8,background:"#00000070",backdropFilter:"blur(8px)",borderRadius:7,padding:"2px 8px",fontSize:9,color:C.muted}}>📍 Nairobi</div>
-      <div style={{position:"absolute",top:8,right:8,background:"#00000070",backdropFilter:"blur(8px)",borderRadius:7,padding:"2px 8px",fontSize:9,color:C.accent}}>
+    <div style={{position:"relative",width:"100%",borderRadius:18,overflow:"hidden",border:`1px solid ${C.border}`,marginBottom:10}}>
+      <div ref={mapRef} style={{width:"100%",height:220}}/>
+      {!ready && (
+        <div style={{position:"absolute",inset:0,background:"#0D1B2A",display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div className="spin" style={{width:28,height:28,borderRadius:"50%",border:`3px solid #1E2D3D`,borderTop:`3px solid #00E5A0`}}/>
+        </div>
+      )}
+      {/* Overlays */}
+      <div style={{position:"absolute",top:8,left:8,background:"#00000088",backdropFilter:"blur(8px)",borderRadius:7,padding:"2px 8px",fontSize:9,color:"#8899AA",pointerEvents:"none"}}>📍 Nairobi</div>
+      <div style={{position:"absolute",top:8,right:8,background:"#00000088",backdropFilter:"blur(8px)",borderRadius:7,padding:"2px 8px",fontSize:9,color:"#00E5A0",pointerEvents:"none"}}>
         {spots.filter(s=>(s.available_spaces??0)>0).length}/{spots.length} free
       </div>
+      {selected && (
+        <button onClick={()=>onDirections(selected)} style={{
+          position:"absolute",bottom:8,right:8,
+          background:"#4DA6FF",border:"none",borderRadius:20,
+          padding:"5px 12px",fontSize:10,fontWeight:800,
+          color:"#fff",cursor:"pointer",boxShadow:"0 2px 12px #4DA6FF60",
+          display:"flex",alignItems:"center",gap:5,
+        }}>🧭 Directions</button>
+      )}
+    </div>
+  );
+}
+
+// ─── DIRECTIONS PANEL ─────────────────────────────────────────────────────────
+function DirectionsPanel({ spot, userLocation, directions, loading, onClose }) {
+  return (
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:14,marginBottom:10}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div>
+          <div style={{fontSize:12,fontWeight:800,color:C.text}}>🧭 Directions to {spot.name}</div>
+          {directions && !loading && (
+            <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+              📏 {directions.distanceKm} km · ⏱ ~{directions.durationMin} min drive
+            </div>
+          )}
+        </div>
+        <button onClick={onClose} style={{background:"#1E2D3D",border:`1px solid ${C.border}`,color:C.muted,width:28,height:28,borderRadius:"50%",cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+      </div>
+
+      {loading && (
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",color:C.muted,fontSize:12}}>
+          <div className="spin" style={{width:16,height:16,borderRadius:"50%",border:`2px solid ${C.border}`,borderTop:`2px solid ${C.accent}`,flexShrink:0}}/>
+          Calculating route…
+        </div>
+      )}
+
+      {!loading && !userLocation && (
+        <div style={{fontSize:11,color:C.warn,padding:"6px 0"}}>⚠ Enable location access to get directions</div>
+      )}
+
+      {!loading && directions?.steps?.length > 0 && (
+        <div style={{maxHeight:140,overflowY:"auto"}}>
+          {directions.steps.map((step, i) => (
+            <div key={i} style={{display:"flex",gap:8,padding:"5px 0",borderBottom:`1px solid ${C.border}`}}>
+              <div style={{width:18,height:18,borderRadius:"50%",background:C.accentSoft,border:`1px solid ${C.accent}30`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:8,fontWeight:800,color:C.accent}}>{i+1}</div>
+              <div>
+                <div style={{fontSize:11,color:C.text,lineHeight:1.4}}>{step.instruction}</div>
+                {step.distance > 0 && <div style={{fontSize:9,color:C.muted,marginTop:1}}>{step.distance < 1000 ? `${Math.round(step.distance)}m` : `${(step.distance/1000).toFixed(1)}km`}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Open in Google Maps */}
+      <a
+        href={`https://www.google.com/maps/dir/?api=1&destination=${spot.lat},${spot.lng}&travelmode=driving`}
+        target="_blank" rel="noreferrer"
+        style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,marginTop:10,padding:"9px",background:"#1E2D3D",border:`1px solid ${C.border}`,borderRadius:10,fontSize:11,fontWeight:700,color:C.blue,textDecoration:"none"}}
+      >
+        🗺️ Open in Google Maps
+      </a>
+      <a
+        href={`https://waze.com/ul?ll=${spot.lat},${spot.lng}&navigate=yes`}
+        target="_blank" rel="noreferrer"
+        style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,marginTop:6,padding:"9px",background:"#1E2D3D",border:`1px solid ${C.border}`,borderRadius:10,fontSize:11,fontWeight:700,color:"#33CCFF",textDecoration:"none"}}
+      >
+        📡 Open in Waze
+      </a>
     </div>
   );
 }
 
 // ─── SPOT CARD ────────────────────────────────────────────────────────────────
-function SpotCard({ spot, onClick }) {
+function SpotCard({ spot, onClick, onDirections }) {
   const avail = spot.available_spaces ?? 0;
   const total = spot.total_spaces ?? 1;
   const color = avail===0 ? C.danger : avail<=5 ? C.warn : C.accent;
   return (
-    <div onClick={()=>onClick(spot)} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:14,marginBottom:8,cursor:"pointer",opacity:avail===0?0.65:1,transition:"all 0.15s"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:14,marginBottom:8,cursor:"pointer",opacity:avail===0?0.65:1,transition:"all 0.15s"}}>
+      <div onClick={()=>onClick(spot)} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
         <div style={{flex:1,minWidth:0,marginRight:10}}>
           <div style={{display:"flex",gap:5,marginBottom:4,alignItems:"center",flexWrap:"wrap"}}>
             <Badge>{spot.type||"Parking"}</Badge>
@@ -209,11 +373,18 @@ function SpotCard({ spot, onClick }) {
       <div style={{width:"100%",height:3,background:"#1E2D3D",borderRadius:3,overflow:"hidden",marginBottom:6}}>
         <div style={{width:`${(avail/total)*100}%`,height:"100%",background:color,borderRadius:3,transition:"width 0.5s"}}/>
       </div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10}}>
-        <span style={{color,fontWeight:700}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <span style={{fontSize:10,color,fontWeight:700}}>
           {avail===0 ? "🔴 Full" : avail<=5 ? `🟡 Only ${avail} left` : `🟢 ${avail} spaces free`}
         </span>
-        <span style={{color:C.accent,fontSize:9,fontWeight:700}}>● LIVE</span>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          <span style={{color:C.accent,fontSize:9,fontWeight:700}}>● LIVE</span>
+          {onDirections && (
+            <button onClick={e=>{ e.stopPropagation(); onDirections(spot); }} style={{background:"#4DA6FF15",border:`1px solid #4DA6FF40`,borderRadius:20,padding:"3px 9px",fontSize:9,fontWeight:700,color:C.blue,cursor:"pointer"}}>
+              🧭 Directions
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -776,6 +947,70 @@ function DriverHome({ user, spots, loading, connected }) {
   const [selected, setSelected] = useState(null);
   const [bookingSpot, setBookingSpot] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+  const [directionsSpot, setDirectionsSpot] = useState(null);
+  const [directions, setDirections] = useState(null);
+  const [directionsLoading, setDirectionsLoading] = useState(false);
+
+  // Get user's GPS location once
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      pos => setUserLocation([pos.coords.latitude, pos.coords.longitude]),
+      () => {} // silently fail
+    );
+  }, []);
+
+  const fetchDirections = async (spot) => {
+    setDirectionsSpot(spot);
+    setDirections(null);
+    setDirectionsLoading(true);
+    try {
+      // Use user location or default Nairobi CBD centre
+      const origin = userLocation || [-1.286389, 36.817223];
+      const url = `https://router.project-osrm.org/route/v1/driving/${origin[1]},${origin[0]};${spot.lng},${spot.lat}?steps=true&geometries=geojson&overview=full`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (data.code !== "Ok" || !data.routes?.length) throw new Error("No route");
+      const route = data.routes[0];
+      const coords = route.geometry.coordinates.map(c => [c[1], c[0]]);
+      const steps = route.legs[0]?.steps?.map(s => ({
+        instruction: s.maneuver?.instruction || cleanOSRMStep(s),
+        distance: s.distance,
+      })) || [];
+      setDirections({
+        route: coords,
+        distanceKm: (route.distance / 1000).toFixed(1),
+        durationMin: Math.round(route.duration / 60),
+        steps,
+      });
+    } catch(e) {
+      setDirections({ error: true, steps: [] });
+    } finally {
+      setDirectionsLoading(false);
+    }
+  };
+
+  const cleanOSRMStep = (step) => {
+    const type = step.maneuver?.type || "";
+    const modifier = step.maneuver?.modifier || "";
+    const name = step.name || "the road";
+    if (type === "depart") return `Head onto ${name}`;
+    if (type === "arrive") return `Arrive at destination`;
+    if (type === "turn") return `Turn ${modifier} onto ${name}`;
+    if (type === "roundabout") return `Enter roundabout, take exit onto ${name}`;
+    return `Continue onto ${name}`;
+  };
+
+  const openDirections = (spot) => {
+    setSelected(spot);
+    fetchDirections(spot);
+  };
+
+  const closeDirections = () => {
+    setDirectionsSpot(null);
+    setDirections(null);
+  };
 
   const filtered = spots.filter(s => {
     if (search) return (
@@ -804,8 +1039,8 @@ function DriverHome({ user, spots, loading, connected }) {
 
   return (
     <div style={{position:"relative",height:"100%",overflow:"hidden"}}>
-      {/* Scrollable content */}
       <div style={{height:"100%",overflowY:"auto",padding:"6px 16px 20px",boxSizing:"border-box"}}>
+
         {/* Header */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <div>
@@ -838,7 +1073,25 @@ function DriverHome({ user, spots, loading, connected }) {
             <div className="spin" style={{width:32,height:32,borderRadius:"50%",border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`}}/>
           </div>
         ) : (
-          <MapView spots={spots} selected={selected} onSelect={openBooking}/>
+          <MapView
+            spots={spots}
+            selected={selected}
+            onSelect={s=>{ setSelected(s); closeDirections(); }}
+            userLocation={userLocation}
+            directions={directions}
+            onDirections={openDirections}
+          />
+        )}
+
+        {/* Directions Panel */}
+        {directionsSpot && (
+          <DirectionsPanel
+            spot={directionsSpot}
+            userLocation={userLocation}
+            directions={directions}
+            loading={directionsLoading}
+            onClose={closeDirections}
+          />
         )}
 
         {/* Stats */}
@@ -861,11 +1114,11 @@ function DriverHome({ user, spots, loading, connected }) {
 
         {/* Spot list */}
         {filtered.map(s => (
-          <SpotCard key={s.id} spot={s} onClick={openBooking}/>
+          <SpotCard key={s.id} spot={s} onClick={openBooking} onDirections={openDirections}/>
         ))}
       </div>
 
-      {/* Booking Modal — outside scroll, positioned over everything */}
+      {/* Booking Modal */}
       {bookingSpot && (
         <BookingModal
           spot={bookingSpot}
