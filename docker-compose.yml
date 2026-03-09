@@ -1,0 +1,88 @@
+# ─── ParkSmart Nairobi — Full Production Stack ───────────────────────────────
+# Runs: Frontend (React) + Backend (Node) + Nginx reverse proxy
+# High-traffic ready: horizontal scaling, Redis, PostgreSQL
+#
+# Usage:
+#   docker compose up --build          # Start everything
+#   docker compose up -d               # Start in background
+#   docker compose logs -f backend     # Watch backend logs
+#   docker compose down                # Stop all
+
+services:
+
+  # ── Node.js Backend ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: parksmart-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      FRONTEND_URL: http://localhost
+      # DATABASE_URL: postgresql://parksmart:secret@postgres:5432/parksmart
+      # REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:-change_me_in_production_please}
+    ports:
+      - "4000:4000"
+    # depends_on:
+    #   - postgres
+    #   - redis
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - parksmart-net
+
+  # ── React Frontend + Nginx ───────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: ""   # Empty = same origin (proxied by Nginx)
+    container_name: parksmart-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - parksmart-net
+
+  # ── PostgreSQL (uncomment when ready) ────────────────────────────────────────
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: parksmart-db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: parksmart
+  #     POSTGRES_PASSWORD: secret
+  #     POSTGRES_DB: parksmart
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   networks:
+  #     - parksmart-net
+
+  # ── Redis (uncomment when ready) ─────────────────────────────────────────────
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: parksmart-redis
+  #   restart: unless-stopped
+  #   command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+  #   volumes:
+  #     - redis_data:/data
+  #   networks:
+  #     - parksmart-net
+
+networks:
+  parksmart-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

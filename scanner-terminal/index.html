@@ -1,0 +1,160 @@
+/**
+ * scanner-terminal/index.html
+ * 
+ * Runs on the tablet/kiosk at each parking gate.
+ * Connect with ?scanner=SCN-WS-ENTRY (or any registered scanner ID)
+ * Works offline-first, reconnects automatically.
+ */
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ParkSmart Gate Terminal</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0A0F1E;color:#F0F4FF;font-family:'Segoe UI',sans-serif;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px}
+  h1{font-size:1.4rem;font-weight:800;color:#00E5A0;letter-spacing:1px;margin-bottom:4px}
+  .scanner-id{font-size:.75rem;color:#6B7A99;font-family:monospace;margin-bottom:24px}
+  .status-bar{display:flex;align-items:center;gap:8px;background:#111827;border:1px solid #1E2D3D;border-radius:12px;padding:8px 16px;margin-bottom:28px;font-size:.8rem}
+  .dot{width:8px;height:8px;border-radius:50%;transition:background .3s}
+  .dot.online{background:#00E5A0;box-shadow:0 0 8px #00E5A0}
+  .dot.offline{background:#FF4D6D}
+  .input-area{width:100%;max-width:480px;text-align:center}
+  input{width:100%;background:#111827;border:2px solid #1E2D3D;border-radius:14px;padding:18px 20px;font-size:1.6rem;font-family:monospace;letter-spacing:4px;color:#F0F4FF;text-align:center;text-transform:uppercase;outline:none;transition:border .2s}
+  input:focus{border-color:#00E5A060}
+  .scan-btn{margin-top:14px;width:100%;padding:16px;background:linear-gradient(135deg,#00E5A0,#00C488);border:none;border-radius:14px;font-size:1.1rem;font-weight:800;color:#0A0F1E;cursor:pointer}
+  .result{margin-top:24px;width:100%;max-width:480px;border-radius:18px;padding:28px;text-align:center;transition:all .3s;display:none}
+  .result.show{display:block}
+  .result.open{background:#00E5A015;border:2px solid #00E5A0}
+  .result.deny{background:#FF4D6D15;border:2px solid #FF4D6D}
+  .result-icon{font-size:3.5rem;margin-bottom:12px}
+  .result-title{font-size:1.4rem;font-weight:800;margin-bottom:6px}
+  .result.open .result-title{color:#00E5A0}
+  .result.deny .result-title{color:#FF4D6D}
+  .result-detail{font-size:.85rem;color:#6B7A99;line-height:1.6}
+  .log-area{margin-top:24px;width:100%;max-width:480px;background:#111827;border:1px solid #1E2D3D;border-radius:14px;padding:14px;max-height:200px;overflow-y:auto}
+  .log-title{font-size:.7rem;font-weight:700;color:#6B7A99;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
+  .log-item{display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #1E2D3D15;font-size:.75rem}
+  .log-item:last-child{border:none}
+  .log-badge{padding:2px 7px;border-radius:20px;font-weight:700;font-size:.65rem}
+  .log-badge.open{background:#00E5A015;color:#00E5A0}
+  .log-badge.deny{background:#FF4D6D15;color:#FF4D6D}
+  .log-plate{font-family:monospace;font-weight:700;color:#F0F4FF}
+  .log-time{color:#6B7A99;margin-left:auto}
+</style>
+</head>
+<body>
+
+<h1>🅿️ ParkSmart Gate Terminal</h1>
+<div class="scanner-id" id="scannerLabel">Connecting…</div>
+
+<div class="status-bar">
+  <div class="dot offline" id="dot"></div>
+  <span id="statusText">Connecting to server…</span>
+</div>
+
+<div class="input-area">
+  <input type="text" id="plateInput" placeholder="KBX 123D" maxlength="10" autocomplete="off" autofocus/>
+  <button class="scan-btn" onclick="submitScan()">🔍 SCAN PLATE</button>
+</div>
+
+<div class="result" id="result">
+  <div class="result-icon" id="resultIcon"></div>
+  <div class="result-title" id="resultTitle"></div>
+  <div class="result-detail" id="resultDetail"></div>
+</div>
+
+<div class="log-area">
+  <div class="log-title">Recent Scans</div>
+  <div id="logList"></div>
+</div>
+
+<script>
+  // Get scanner ID from URL: ?scanner=SCN-WS-ENTRY
+  const params = new URLSearchParams(location.search);
+  const SCANNER_ID = params.get("scanner") || "SCN-WS-ENTRY";
+  const SERVER_URL = params.get("server") || "http://localhost:4000";
+
+  const socket = io(SERVER_URL, { transports:["websocket","polling"], reconnection:true, reconnectionDelay:1000 });
+
+  socket.on("connect", () => {
+    socket.emit("scanner:register", SCANNER_ID);
+    setStatus(true, "Registering…");
+  });
+
+  socket.on("scanner:ready", ({ scannerId, label, role }) => {
+    document.getElementById("scannerLabel").textContent = `${label}  ·  ${scannerId}  ·  ${role.toUpperCase()}`;
+    setStatus(true, "Online – ready to scan");
+  });
+
+  socket.on("scanner:error", ({ error }) => {
+    setStatus(false, "Error: " + error);
+    document.getElementById("scannerLabel").textContent = error;
+  });
+
+  socket.on("disconnect", () => setStatus(false, "Disconnected – reconnecting…"));
+  socket.on("connect_error", () => setStatus(false, "Cannot reach server"));
+
+  socket.on("gate:open", ({ plate, booking, scanner }) => {
+    showResult("open", "✅", "GATE OPEN", [
+      `Vehicle: ${plate}`,
+      `Booking: ${booking.id}`,
+      `Duration: ${booking.hours} hr${booking.hours>1?"s":""}`,
+      `Expires: ${new Date(booking.expiresAt).toLocaleTimeString()}`,
+    ].join("\n"));
+    addLog("open", plate);
+    // Auto-clear after 5 seconds
+    setTimeout(clearResult, 5000);
+  });
+
+  socket.on("gate:deny", ({ plate, reason }) => {
+    showResult("deny", "🚫", "ACCESS DENIED", `${plate}\n${reason}`);
+    addLog("deny", plate);
+    setTimeout(clearResult, 4000);
+  });
+
+  function submitScan() {
+    const plate = document.getElementById("plateInput").value.trim();
+    if (!plate) return;
+    if (!socket.connected) { alert("Not connected to server"); return; }
+    socket.emit("scan:plate", { scannerId: SCANNER_ID, plate });
+    document.getElementById("plateInput").value = "";
+  }
+
+  // Allow Enter key
+  document.getElementById("plateInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") submitScan();
+  });
+
+  function setStatus(online, text) {
+    document.getElementById("dot").className = "dot " + (online ? "online" : "offline");
+    document.getElementById("statusText").textContent = text;
+  }
+
+  function showResult(type, icon, title, detail) {
+    const el = document.getElementById("result");
+    el.className = "result show " + type;
+    document.getElementById("resultIcon").textContent = icon;
+    document.getElementById("resultTitle").textContent = title;
+    document.getElementById("resultDetail").style.whiteSpace = "pre-line";
+    document.getElementById("resultDetail").textContent = detail;
+  }
+
+  function clearResult() {
+    document.getElementById("result").className = "result";
+  }
+
+  function addLog(action, plate) {
+    const list = document.getElementById("logList");
+    const time = new Date().toLocaleTimeString();
+    const item = document.createElement("div");
+    item.className = "log-item";
+    item.innerHTML = `<span class="log-badge ${action}">${action.toUpperCase()}</span><span class="log-plate">${plate}</span><span class="log-time">${time}</span>`;
+    list.insertBefore(item, list.firstChild);
+    if (list.children.length > 20) list.removeChild(list.lastChild);
+  }
+</script>
+</body>
+</html>

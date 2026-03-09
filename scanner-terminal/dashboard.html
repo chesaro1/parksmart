@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>ParkSmart – Scanner Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#070C1A;color:#F0F4FF;font-family:'Segoe UI',sans-serif;min-height:100vh;padding:20px}
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:16px;border-bottom:1px solid #1E2D3D}
+.logo{font-size:1.3rem;font-weight:800;color:#00E5A0}
+.logo span{color:#F0F4FF}
+.conn-badge{display:flex;align-items:center;gap:6px;background:#111827;border:1px solid #1E2D3D;border-radius:20px;padding:6px 14px;font-size:.75rem}
+.dot{width:8px;height:8px;border-radius:50%}
+.dot.on{background:#00E5A0;box-shadow:0 0 6px #00E5A0;animation:pulse 2s infinite}
+.dot.off{background:#FF4D6D}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+.stat{background:#111827;border:1px solid #1E2D3D;border-radius:14px;padding:16px;text-align:center}
+.stat-val{font-size:1.8rem;font-weight:800;color:#00E5A0}
+.stat-label{font-size:.7rem;color:#6B7A99;margin-top:4px;text-transform:uppercase;letter-spacing:1px}
+
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+.panel{background:#111827;border:1px solid #1E2D3D;border-radius:16px;padding:18px}
+.panel-title{font-size:.75rem;font-weight:700;color:#6B7A99;letter-spacing:1px;text-transform:uppercase;margin-bottom:14px}
+
+.scanner-item{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #1E2D3D15}
+.scanner-item:last-child{border:none}
+.scanner-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
+.scanner-info{flex:1;min-width:0}
+.scanner-name{font-size:.82rem;font-weight:700;color:#F0F4FF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scanner-sub{font-size:.68rem;color:#6B7A99;font-family:monospace}
+.scanner-role{font-size:.65rem;padding:2px 7px;border-radius:20px;font-weight:700}
+.role-entry{background:#00E5A015;color:#00E5A0}
+.role-exit{background:#4DA6FF15;color:#4DA6FF}
+
+.log-item{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #1E2D3D15;font-size:.75rem;animation:fadeIn .3s ease}
+.log-item:last-child{border:none}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.log-badge{padding:2px 8px;border-radius:20px;font-weight:700;font-size:.65rem;flex-shrink:0}
+.badge-open{background:#00E5A015;color:#00E5A0}
+.badge-deny{background:#FF4D6D15;color:#FF4D6D}
+.log-plate{font-family:monospace;font-weight:700;color:#F0F4FF;min-width:80px}
+.log-spot{color:#6B7A99;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log-time{color:#6B7A99;flex-shrink:0;font-family:monospace;font-size:.68rem}
+
+.spots-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.spot-card{background:#0E1623;border:1px solid #1E2D3D;border-radius:12px;padding:12px}
+.spot-name{font-size:.8rem;font-weight:700;color:#F0F4FF;margin-bottom:4px}
+.spot-area{font-size:.65rem;color:#6B7A99;margin-bottom:8px}
+.avail-bar{height:4px;background:#1E2D3D;border-radius:4px;overflow:hidden;margin-bottom:4px}
+.avail-fill{height:100%;border-radius:4px;transition:width .6s ease}
+.spot-count{font-size:.7rem;font-weight:700}
+.spot-scanners{font-size:.63rem;color:#6B7A99;margin-top:4px}
+
+@media(max-width:700px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">🅿️ ParkSmart <span>Dashboard</span></div>
+  <div class="conn-badge">
+    <div class="dot off" id="connDot"></div>
+    <span id="connText">Connecting…</span>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="stat-val" id="statSpots">-</div><div class="stat-label">Locations</div></div>
+  <div class="stat"><div class="stat-val" id="statScanners">-</div><div class="stat-label">Scanners Online</div></div>
+  <div class="stat"><div class="stat-val" id="statScans">0</div><div class="stat-label">Scans Today</div></div>
+  <div class="stat"><div class="stat-val" id="statGrants">0</div><div class="stat-label">Access Granted</div></div>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <div class="panel-title">Scanner Status</div>
+    <div id="scannerList">Loading…</div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">Live Scan Events</div>
+    <div id="logList" style="max-height:320px;overflow-y:auto"></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-title">Parking Locations — Live Availability</div>
+  <div class="spots-grid" id="spotsGrid">Loading…</div>
+</div>
+
+<script>
+  const SERVER_URL = new URLSearchParams(location.search).get("server") || "http://localhost:4000";
+  const socket = io(SERVER_URL, { transports:["websocket","polling"] });
+
+  let state = { scanners:[], spots:[], scanCount:0, grantCount:0 };
+
+  socket.on("connect", () => {
+    setConn(true, "Connected");
+    socket.emit("dashboard:join");
+  });
+  socket.on("disconnect", () => setConn(false, "Disconnected"));
+
+  socket.on("dashboard:snapshot", ({ scanners, recentLogs, spots }) => {
+    state.scanners = scanners;
+    state.spots = spots;
+    renderScanners();
+    renderSpots();
+    recentLogs.reverse().forEach(addLogItem);
+    updateStats();
+  });
+
+  socket.on("scanner:status", ({ scannerId, label, online }) => {
+    const s = state.scanners.find(x => x.id === scannerId);
+    if (s) { s.online = online; renderScanners(); updateStats(); }
+  });
+
+  socket.on("scan:event", (log) => {
+    addLogItem(log);
+    state.scanCount++;
+    if (log.action === "open") state.grantCount++;
+    updateStats();
+  });
+
+  socket.on("spot:updated", ({ spotId, available }) => {
+    const s = state.spots.find(x => x.id === spotId);
+    if (s) { s.available = available; renderSpots(); }
+  });
+
+  function setConn(on, text) {
+    document.getElementById("connDot").className = "dot " + (on ? "on" : "off");
+    document.getElementById("connText").textContent = text;
+  }
+
+  function updateStats() {
+    document.getElementById("statSpots").textContent = state.spots.length;
+    document.getElementById("statScanners").textContent = state.scanners.filter(s => s.online).length + "/" + state.scanners.length;
+    document.getElementById("statScans").textContent = state.scanCount;
+    document.getElementById("statGrants").textContent = state.grantCount;
+  }
+
+  function renderScanners() {
+    const list = document.getElementById("scannerList");
+    list.innerHTML = state.scanners.map(s => `
+      <div class="scanner-item">
+        <div class="scanner-dot" style="background:${s.online?"#00E5A0":"#FF4D6D"};${s.online?"box-shadow:0 0 6px #00E5A0":""};"></div>
+        <div class="scanner-info">
+          <div class="scanner-name">${s.label}</div>
+          <div class="scanner-sub">${s.id} · ${s.spotName}</div>
+        </div>
+        <span class="scanner-role ${s.role === "entry" ? "role-entry" : "role-exit"}">${s.role.toUpperCase()}</span>
+      </div>`).join("");
+  }
+
+  function addLogItem(log) {
+    const list = document.getElementById("logList");
+    const time = new Date(log.timestamp).toLocaleTimeString();
+    const item = document.createElement("div");
+    item.className = "log-item";
+    item.innerHTML = `
+      <span class="log-badge ${log.action === "open" ? "badge-open" : "badge-deny"}">${log.action.toUpperCase()}</span>
+      <span class="log-plate">${log.plate}</span>
+      <span class="log-spot">${log.spotName}</span>
+      <span class="log-time">${time}</span>`;
+    list.insertBefore(item, list.firstChild);
+    if (list.children.length > 60) list.removeChild(list.lastChild);
+  }
+
+  function renderSpots() {
+    const grid = document.getElementById("spotsGrid");
+    grid.innerHTML = state.spots.map(s => {
+      const pct = (s.available / s.total) * 100;
+      const color = pct > 40 ? "#00E5A0" : pct > 15 ? "#FFB800" : "#FF4D6D";
+      return `<div class="spot-card">
+        <div class="spot-name">${s.name}</div>
+        <div class="spot-area">${s.area} · ${s.type}</div>
+        <div class="avail-bar"><div class="avail-fill" style="width:${pct}%;background:${color}"></div></div>
+        <div class="spot-count" style="color:${color}">${s.available}/${s.total} free</div>
+        <div class="spot-scanners">🔲 ${(s.scanners||[]).join(", ")}</div>
+      </div>`;
+    }).join("");
+  }
+</script>
+</body>
+</html>
