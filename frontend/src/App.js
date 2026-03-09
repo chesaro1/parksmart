@@ -219,24 +219,70 @@ function SpotCard({ spot, onClick }) {
   );
 }
 
+// ─── TIME HELPERS ─────────────────────────────────────────────────────────────
+function getNowTime() {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+}
+function addHoursToTime(timeStr, hrs) {
+  const [h, m] = timeStr.split(":").map(Number);
+  const total = h * 60 + m + Math.round(hrs * 60);
+  return `${String(Math.floor(total/60)%24).padStart(2,"0")}:${String(total%60).padStart(2,"0")}`;
+}
+function timeDiffHours(start, end) {
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  let mins = (eh * 60 + em) - (sh * 60 + sm);
+  if (mins <= 0) mins += 24 * 60; // next day
+  return Math.max(0.5, parseFloat((mins / 60).toFixed(2)));
+}
+function fmtTime(t) {
+  const [h, m] = t.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  return `${h % 12 || 12}:${String(m).padStart(2,"0")} ${ampm}`;
+}
+
 // ─── BOOKING MODAL ────────────────────────────────────────────────────────────
 function BookingModal({ spot, user, onClose, onSuccess }) {
-  const [hours, setHours] = useState(1);
+  const nowTime = getNowTime();
+  const [startTime, setStartTime] = useState(nowTime);
+  const [endTime, setEndTime] = useState(addHoursToTime(nowTime, 1));
   const [plate, setPlate] = useState((user?.vehicles||[])[0]||"");
   const [phone, setPhone] = useState(user?.phone||"");
   const [step, setStep] = useState("form"); // form | paying | done
   const [error, setError] = useState("");
-  const total = (spot.price_per_hour||0) * hours;
+
+  const hours = timeDiffHours(startTime, endTime);
+  const total = Math.round((spot.price_per_hour||0) * hours);
   const avail = spot.available_spaces ?? 0;
+
+  // Quick-pick durations
+  const quickDurations = [0.5, 1, 2, 3, 4, 6];
+
+  const setDuration = (hrs) => {
+    setEndTime(addHoursToTime(startTime, hrs));
+  };
+
+  const handleStartChange = (val) => {
+    setStartTime(val);
+    setEndTime(addHoursToTime(val, hours));
+  };
 
   const book = async () => {
     if (!plate.trim()) return setError("Please enter your vehicle plate number");
     if (!phone.trim()) return setError("Please enter your M-Pesa phone number");
+    if (hours < 0.5) return setError("Minimum parking time is 30 minutes");
     setError(""); setStep("paying");
     try {
-      const { booking } = await bookingsApi.create({ spotId:spot.id, hours, vehiclePlate:plate.trim() });
+      const { booking } = await bookingsApi.create({
+        spotId: spot.id,
+        hours: parseFloat(hours.toFixed(2)),
+        vehiclePlate: plate.trim(),
+        startTime,
+        endTime,
+      });
       await paymentsApi.stkPush({ phone:phone.trim(), amount:booking.total_amount, bookingId:booking.id });
-      setTimeout(() => onSuccess(booking), 3500);
+      setTimeout(() => onSuccess({ ...booking, startTime, endTime }), 3500);
     } catch(e) {
       setError(e.response?.data?.error || "Booking failed. Please try again.");
       setStep("form");
@@ -244,8 +290,9 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
   };
 
   return (
-    <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.8)",backdropFilter:"blur(4px)",zIndex:200,display:"flex",alignItems:"flex-end",borderRadius:44}}>
-      <div className="slide-up" style={{width:"100%",background:C.card,borderRadius:"24px 24px 0 0",border:`1px solid ${C.border}`,padding:"22px 20px 36px",boxSizing:"border-box",maxHeight:"85%",overflowY:"auto"}}>
+    <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.82)",backdropFilter:"blur(5px)",zIndex:200,display:"flex",alignItems:"flex-end",borderRadius:44}}>
+      <div className="slide-up" style={{width:"100%",background:C.card,borderRadius:"24px 24px 0 0",border:`1px solid ${C.border}`,padding:"22px 20px 36px",boxSizing:"border-box",maxHeight:"88%",overflowY:"auto"}}>
+
         {step==="paying" ? (
           <div style={{textAlign:"center",padding:"28px 0"}}>
             <div className="spin" style={{width:52,height:52,borderRadius:"50%",border:`4px solid ${C.border}`,borderTop:`4px solid ${C.accent}`,margin:"0 auto 20px"}}/>
@@ -256,6 +303,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
           </div>
         ) : (
           <>
+            {/* Header */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
               <div style={{flex:1,marginRight:10}}>
                 <div style={{fontSize:16,fontWeight:800,color:C.text}}>{spot.name}</div>
@@ -283,18 +331,63 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                   style={{fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}
                 />
 
+                {/* ── TIME PICKER ── */}
                 <div style={{marginBottom:14}}>
-                  <div style={{fontSize:10,color:C.muted,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:10}}>Duration</div>
-                  <div style={{display:"flex",alignItems:"center",gap:16}}>
-                    <button onClick={()=>setHours(h=>Math.max(1,h-1))} style={{width:40,height:40,borderRadius:"50%",background:"#1E2D3D",border:`1px solid ${C.border}`,color:C.text,fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>−</button>
-                    <div style={{textAlign:"center",flex:1}}>
-                      <div style={{fontSize:32,fontWeight:800,color:C.text,lineHeight:1}}>{hours}</div>
-                      <div style={{fontSize:11,color:C.muted,marginTop:2}}>hour{hours>1?"s":""}</div>
+                  <div style={{fontSize:10,color:C.muted,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Parking Time</div>
+
+                  {/* Start / End time inputs */}
+                  <div style={{display:"flex",gap:8,marginBottom:10}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:9,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>Start</div>
+                      <input
+                        type="time"
+                        value={startTime}
+                        onChange={e=>handleStartChange(e.target.value)}
+                        style={{width:"100%",background:"#1E2D3D",border:`1px solid ${C.accent}40`,borderRadius:10,padding:"10px 10px",fontSize:15,fontWeight:700,color:C.accent,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}
+                      />
                     </div>
-                    <button onClick={()=>setHours(h=>Math.min(12,h+1))} style={{width:40,height:40,borderRadius:"50%",background:"#1E2D3D",border:`1px solid ${C.border}`,color:C.text,fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>+</button>
+                    <div style={{display:"flex",alignItems:"center",paddingTop:18,color:C.muted,fontSize:18}}>→</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:9,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:4}}>End</div>
+                      <input
+                        type="time"
+                        value={endTime}
+                        onChange={e=>setEndTime(e.target.value)}
+                        style={{width:"100%",background:"#1E2D3D",border:`1px solid ${C.blue}40`,borderRadius:10,padding:"10px 10px",fontSize:15,fontWeight:700,color:C.blue,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Quick duration chips */}
+                  <div style={{display:"flex",gap:5,marginBottom:10,flexWrap:"wrap"}}>
+                    {quickDurations.map(d => {
+                      const label = d < 1 ? "30 min" : `${d}hr${d>1?"s":""}`;
+                      const isActive = Math.abs(hours - d) < 0.1;
+                      return (
+                        <button key={d} onClick={()=>setDuration(d)} style={{
+                          padding:"5px 11px",borderRadius:20,fontSize:10,fontWeight:700,cursor:"pointer",
+                          background:isActive?C.accent:C.accentSoft,
+                          color:isActive?C.bg:C.accent,
+                          border:`1px solid ${isActive?C.accent:C.accent+"40"}`,
+                          transition:"all 0.15s"
+                        }}>{label}</button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Duration summary bar */}
+                  <div style={{background:"#0A0F1E",borderRadius:12,padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${C.border}`}}>
+                    <div>
+                      <div style={{fontSize:9,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5}}>Duration</div>
+                      <div style={{fontSize:18,fontWeight:800,color:C.text,marginTop:1}}>
+                        {hours < 1 ? "30 min" : hours === Math.floor(hours) ? `${hours} hr${hours>1?"s":""}` : `${Math.floor(hours)}h ${Math.round((hours%1)*60)}m`}
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:1}}>{fmtTime(startTime)} → {fmtTime(endTime)}</div>
+                    </div>
                     <div style={{textAlign:"right"}}>
+                      <div style={{fontSize:9,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5}}>Total</div>
                       <div style={{fontSize:22,fontWeight:800,color:C.accent}}>KES {total.toLocaleString()}</div>
-                      <div style={{fontSize:10,color:C.muted}}>total amount</div>
+                      <div style={{fontSize:9,color:C.muted}}>KES {spot.price_per_hour}/hr</div>
                     </div>
                   </div>
                 </div>
@@ -477,6 +570,109 @@ function AccountScreen({ user, setUser, onLogout }) {
   );
 }
 
+// ─── COUNTDOWN HOOK ───────────────────────────────────────────────────────────
+function useCountdown(booking) {
+  const [remaining, setRemaining] = useState(null);
+
+  useEffect(() => {
+    if (booking.status !== "confirmed" || booking.payment_status !== "paid") return;
+
+    // Calculate end time from booking data
+    const getEndMs = () => {
+      // If booking has explicit end_time stored
+      if (booking.end_time) return new Date(booking.end_time).getTime();
+      // Otherwise calculate from created_at + hours
+      const start = new Date(booking.created_at).getTime();
+      const durationMs = (booking.hours || 1) * 60 * 60 * 1000;
+      return start + durationMs;
+    };
+
+    const tick = () => {
+      const diff = getEndMs() - Date.now();
+      setRemaining(diff > 0 ? diff : 0);
+    };
+
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [booking]);
+
+  return remaining;
+}
+
+// ─── COUNTDOWN DISPLAY ────────────────────────────────────────────────────────
+function CountdownTimer({ booking }) {
+  const remaining = useCountdown(booking);
+
+  if (remaining === null) return null;
+
+  if (remaining <= 0) {
+    return (
+      <div style={{background:"#FF4D6D12",border:`1px solid ${C.danger}30`,borderRadius:10,padding:"10px 12px",marginTop:8,textAlign:"center"}}>
+        <div style={{fontSize:11,fontWeight:700,color:C.danger}}>⏰ Parking Time Expired</div>
+        <div style={{fontSize:9,color:C.muted,marginTop:2}}>Please move your vehicle</div>
+      </div>
+    );
+  }
+
+  const totalSecs = Math.floor(remaining / 1000);
+  const hrs = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+
+  // Percentage left for progress ring
+  const totalDuration = (booking.hours || 1) * 3600;
+  const pct = Math.min(100, (totalSecs / totalDuration) * 100);
+  const isLow = pct < 20;
+  const timerColor = isLow ? C.danger : pct < 50 ? C.warn : C.accent;
+
+  // SVG ring
+  const r = 28, circ = 2 * Math.PI * r;
+  const strokeDash = (pct / 100) * circ;
+
+  return (
+    <div style={{background:isLow?"#FF4D6D08":"#00E5A008",border:`1px solid ${timerColor}25`,borderRadius:12,padding:"10px 12px",marginTop:8}}>
+      <div style={{fontSize:9,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8}}>⏱ Time Remaining</div>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        {/* Ring */}
+        <div style={{position:"relative",width:70,height:70,flexShrink:0}}>
+          <svg width="70" height="70" style={{transform:"rotate(-90deg)"}}>
+            <circle cx="35" cy="35" r={r} fill="none" stroke={C.border} strokeWidth="5"/>
+            <circle cx="35" cy="35" r={r} fill="none" stroke={timerColor} strokeWidth="5"
+              strokeDasharray={`${strokeDash} ${circ}`}
+              strokeLinecap="round"
+              style={{transition:"stroke-dasharray 1s linear, stroke 0.5s"}}
+            />
+          </svg>
+          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column"}}>
+            <div style={{fontSize:10,fontWeight:800,color:timerColor,lineHeight:1}}>{String(mins).padStart(2,"0")}:{String(secs).padStart(2,"0")}</div>
+          </div>
+        </div>
+
+        {/* Digital readout */}
+        <div style={{flex:1}}>
+          <div style={{display:"flex",gap:6,alignItems:"baseline"}}>
+            {hrs > 0 && (
+              <>
+                <span style={{fontSize:26,fontWeight:800,color:timerColor,lineHeight:1}}>{hrs}</span>
+                <span style={{fontSize:10,color:C.muted,fontWeight:600}}>hr</span>
+              </>
+            )}
+            <span style={{fontSize:26,fontWeight:800,color:timerColor,lineHeight:1}}>{String(mins).padStart(2,"0")}</span>
+            <span style={{fontSize:10,color:C.muted,fontWeight:600}}>min</span>
+            <span style={{fontSize:26,fontWeight:800,color:timerColor,lineHeight:1}}>{String(secs).padStart(2,"0")}</span>
+            <span style={{fontSize:10,color:C.muted,fontWeight:600}}>sec</span>
+          </div>
+          <div style={{marginTop:6,width:"100%",height:3,background:C.border,borderRadius:3,overflow:"hidden"}}>
+            <div style={{width:`${pct}%`,height:"100%",background:timerColor,borderRadius:3,transition:"width 1s linear"}}/>
+          </div>
+          {isLow && <div style={{fontSize:9,color:C.danger,fontWeight:700,marginTop:4}}>⚠ Less than 20% time left!</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── BOOKINGS SCREEN ──────────────────────────────────────────────────────────
 function BookingsScreen({ user }) {
   const [bookings, setBookings] = useState([]);
@@ -495,41 +691,80 @@ function BookingsScreen({ user }) {
     try { await bookingsApi.cancel(id); load(); } catch(e) {}
   };
 
+  const active = bookings.filter(b => b.status==="confirmed");
+  const past = bookings.filter(b => b.status!=="confirmed");
+
   return (
     <div style={{height:"100%",overflowY:"auto",padding:"14px 16px 80px",boxSizing:"border-box"}}>
-      <div style={{fontSize:20,fontWeight:800,color:C.text,marginBottom:16}}>My Bookings</div>
+      <div style={{fontSize:20,fontWeight:800,color:C.text,marginBottom:4}}>My Bookings</div>
+      <div style={{fontSize:11,color:C.muted,marginBottom:16}}>Live countdown for active sessions</div>
+
       {loading ? <Spinner/> : bookings.length===0 ? (
         <div style={{textAlign:"center",padding:"50px 20px"}}>
           <div style={{fontSize:40,marginBottom:12}}>🅿️</div>
           <div style={{fontSize:14,color:C.muted}}>No bookings yet</div>
           <div style={{fontSize:12,color:C.muted,marginTop:6}}>Find a spot and reserve it</div>
         </div>
-      ) : bookings.map(b => (
-        <Card key={b.id} style={{marginBottom:10}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <span style={{fontSize:10,color:C.muted,fontFamily:"monospace"}}>{b.id}</span>
-            <Badge color={b.status==="confirmed"?C.accent:b.status==="cancelled"?C.danger:C.muted}>
-              {b.status==="confirmed"?"● Active":b.status==="cancelled"?"✕ Cancelled":"✓ Done"}
-            </Badge>
-          </div>
-          <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:3}}>{b.spot_name}</div>
-          <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{b.spot_address}</div>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.muted,marginBottom:4}}>
-            <span>🚗 {b.vehicle_plate}</span>
-            <span>⏱ {b.hours}hr{b.hours>1?"s":""}</span>
-            <span style={{color:C.accent,fontWeight:700}}>KES {(b.total_amount||0).toLocaleString()}</span>
-          </div>
-          <div style={{fontSize:10,color:C.muted}}>
-            Payment: <span style={{color:b.payment_status==="paid"?C.accent:C.warn,fontWeight:700}}>{b.payment_status}</span>
-            {" · "}{timeAgo(b.created_at)}
-          </div>
-          {b.status==="confirmed" && (
-            <button onClick={()=>cancel(b.id)} style={{marginTop:10,width:"100%",padding:"8px",background:"transparent",border:`1px solid ${C.danger}`,borderRadius:8,color:C.danger,fontSize:12,fontWeight:700,cursor:"pointer"}}>
-              Cancel Booking
-            </button>
+      ) : (
+        <>
+          {/* Active bookings with countdown */}
+          {active.length > 0 && (
+            <>
+              <div style={{fontSize:10,color:C.accent,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>● Active Sessions</div>
+              {active.map(b => (
+                <Card key={b.id} style={{marginBottom:12,border:`1px solid ${C.accent}30`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <span style={{fontSize:10,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
+                    <Badge color={C.accent}>● Active</Badge>
+                  </div>
+                  <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>{b.spot_name}</div>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:6}}>{b.spot_address}</div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:C.muted,marginBottom:2}}>
+                    <span>🚗 {b.vehicle_plate}</span>
+                    <span>⏱ {b.hours}hr{b.hours>1?"s":""} booked</span>
+                    <span style={{color:C.accent,fontWeight:700}}>KES {(b.total_amount||0).toLocaleString()}</span>
+                  </div>
+
+                  {/* ── COUNTDOWN ── */}
+                  <CountdownTimer booking={b}/>
+
+                  <button onClick={()=>cancel(b.id)} style={{marginTop:10,width:"100%",padding:"8px",background:"transparent",border:`1px solid ${C.danger}`,borderRadius:8,color:C.danger,fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                    Cancel Booking
+                  </button>
+                </Card>
+              ))}
+            </>
           )}
-        </Card>
-      ))}
+
+          {/* Past bookings */}
+          {past.length > 0 && (
+            <>
+              <div style={{fontSize:10,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:8,marginTop:active.length>0?16:0}}>History</div>
+              {past.map(b => (
+                <Card key={b.id} style={{marginBottom:8,opacity:0.75}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <span style={{fontSize:10,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
+                    <Badge color={b.status==="cancelled"?C.danger:C.muted}>
+                      {b.status==="cancelled"?"✕ Cancelled":"✓ Done"}
+                    </Badge>
+                  </div>
+                  <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:2}}>{b.spot_name}</div>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{b.spot_address}</div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted}}>
+                    <span>🚗 {b.vehicle_plate}</span>
+                    <span>⏱ {b.hours}hr{b.hours>1?"s":""}</span>
+                    <span style={{fontWeight:700}}>KES {(b.total_amount||0).toLocaleString()}</span>
+                  </div>
+                  <div style={{fontSize:10,color:C.muted,marginTop:4}}>
+                    <span style={{color:b.payment_status==="paid"?C.accent:C.warn,fontWeight:700}}>{b.payment_status}</span>
+                    {" · "}{timeAgo(b.created_at)}
+                  </div>
+                </Card>
+              ))}
+            </>
+          )}
+        </>
+      )}
     </div>
   );
 }
