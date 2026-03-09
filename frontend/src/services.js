@@ -1,7 +1,7 @@
 import axios from "axios";
 import { io } from "socket.io-client";
 
-const BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:4000";
+const BASE_URL = process.env.REACT_APP_API_URL || "https://parksmart-backend-f01j.onrender.com";
 
 export const api = axios.create({ baseURL: BASE_URL, timeout: 15000 });
 

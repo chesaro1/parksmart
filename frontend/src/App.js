@@ -667,6 +667,7 @@ function DriverHome({ user, spots, setSpots, loading, connected }) {
   );
 
   return (
+    <div style={{position:"relative",height:"100%"}}>
     <div style={{padding:"6px 16px 20px",height:"100%",overflowY:"auto",boxSizing:"border-box"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
         <div>
@@ -696,7 +697,8 @@ function DriverHome({ user, spots, setSpots, loading, connected }) {
       </div>
       <div style={{fontSize:10,color:C.muted,marginBottom:7}}>{loading?"Loading…":`${filtered.length} location${filtered.length!==1?"s":""} · real-time data`}</div>
       {filtered.map(s=><SpotCard key={s.id} spot={s} onClick={s=>{setSelected(s);setBooking(s);}}/>)}
-      {booking&&<BookingModal spot={booking} user={user} onClose={()=>{setBooking(null);setSelected(null);}} onSuccess={b=>{ setSuccess(b);setBooking(null);setSelected(null); }}/>}
+    </div>
+    {booking&&<BookingModal spot={booking} user={user} onClose={()=>{setBooking(null);setSelected(null);}} onSuccess={b=>{ setSuccess(b);setBooking(null);setSelected(null); }}/>}
     </div>
   );
 }
@@ -774,13 +776,12 @@ export default function App() {
     socketRef.current = socket;
     socket.on("connect",()=>setConnected(true));
     socket.on("disconnect",()=>setConnected(false));
-    socket.on("spots:snapshot",(data)=>{ setSpots(data); setSpotsLoading(false); });
     socket.on("spot:updated",({spotId,available})=>setSpots(prev=>prev.map(s=>s.id===spotId?{...s,available_spaces:available}:s)));
-    socket.on("spots:refresh",async()=>{ const d=await spotsApi.getAll(); setSpots(d.spots||[]); });
+    socket.on("spots:refresh",async()=>{ const d=await spotsApi.getAll(); setSpots(d.spots||[]); setSpotsLoading(false); });
     socket.emit("user:join",user.id);
-    // Immediate HTTP fallback - don't wait for socket
+    // Always load via HTTP first - fast and reliable
     spotsApi.getAll().then(d=>{ setSpots(d.spots||[]); setSpotsLoading(false); }).catch(()=>setSpotsLoading(false));
-    const t = setTimeout(async()=>{ try { const d=await spotsApi.getAll(); setSpots(d.spots||[]); } catch(e){} setSpotsLoading(false); },5000);
+    const t = setTimeout(()=>{}, 100);
     return()=>{ clearTimeout(t); socket.off("spots:snapshot"); socket.off("spot:updated"); socket.off("spots:refresh"); };
   },[user]);
 
