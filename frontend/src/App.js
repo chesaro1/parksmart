@@ -25,54 +25,66 @@ const LIGHT = {
 
 // ─── LUCIDE ICONS (inline SVG — no npm, loads from CDN) ───────────────────────
 // We use a simple SVG icon component driven by path data from lucide.dev
-const Icon = ({ name, size=18, color, strokeWidth=1.8, style:s }) => {
+const Icon = ({ name, size=18, color, strokeWidth=2.2, style:s }) => {
   const C = useTheme();
-  const col = color || C.muted;
-  const paths = {
-    map:         [["M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3V7z","M9 4v13","M15 7v13"]],
-    parking:     [["rect x=3 y=3 width=18 height=18 rx=2","M9 17V7h4a3 3 0 010 6H9"]],
-    user:        [["M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2","M12 3a4 4 0 100 8 4 4 0 000-8z"]],
-    "map-pin":   [["M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z","M12 7a3 3 0 100 6 3 3 0 000-6z"]],
-    navigation:  [["M3 11l19-9-9 19-2-8-8-2z"]],
-    clock:       [["M12 2a10 10 0 100 20 10 10 0 000-20z","M12 6v6l4 2"]],
-    "credit-card":[["M1 4h22v16H1z","M1 9h22"]],
-    star:        [["M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"]],
-    "check-circle":[["M22 11.08V12a10 10 0 11-5.93-9.14","M22 4L12 14.01l-3-3"]],
-    "x-circle":  [["M22 12a10 10 0 11-20 0 10 10 0 0120 0z","M15 9l-6 6M9 9l6 6"]],
-    settings:    [["M12 20a8 8 0 100-16 8 8 0 000 16z","M12 14a2 2 0 100-4 2 2 0 000 4z","M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"]],
-    building:    [["M3 21h18","M3 7v14","M21 7v14","M3 7h18","M9 21V10h6v11","M3 3h18v4H3z"]],
-    "bar-chart": [["M12 20V10","M18 20V4","M6 20v-6"]],
-    "log-out":   [["M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4","M16 17l5-5-5-5","M21 12H9"]],
-    "log-in":    [["M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4","M10 17l5-5-5-5","M15 12H3"]],
-    car:         [["M5 17H3v-5l2-5h14l2 5v5h-2","M7 17a2 2 0 100 4 2 2 0 000-4z","M17 17a2 2 0 100 4 2 2 0 000-4z"]],
-    phone:       [["M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z"]],
-    mail:        [["M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z","M22 6l-10 7L2 6"]],
-    gift:        [["M20 12v10H4V12","M2 7h20v5H2z","M12 22V7","M12 7H7.5a2.5 2.5 0 010-5C11 2 12 7 12 7z","M12 7h4.5a2.5 2.5 0 000-5C13 2 12 7 12 7z"]],
-    calendar:    [["M3 4h18v18H3z","M16 2v4","M8 2v4","M3 10h18"]],
-    search:      [["M11 19a8 8 0 100-16 8 8 0 000 16z","M21 21l-4.35-4.35"]],
-    "x":         [["M18 6L6 18","M6 6l12 12"]],
-    plus:        [["M12 5v14","M5 12h14"]],
-    edit:        [["M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7","M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"]],
-    "alert-triangle":[["M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z","M12 9v4","M12 17h.01"]],
-    info:        [["M12 2a10 10 0 100 20 10 10 0 000-20z","M12 16v-4","M12 8h.01"]],
-    "check":     [["M20 6L9 17l-5-5"]],
-    "trash-2":   [["M3 6h18","M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"]],
-    "compass":   [["M12 2a10 10 0 100 20 10 10 0 000-20z","M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z"]],
-    "route":     [["M3 17h3a4 4 0 008 0h3","M3 7h3a4 4 0 018 0h3","M7 17V7"]],
-    sun:         [["M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42","M12 5a7 7 0 100 14A7 7 0 0012 5z"]],
-    moon:        [["M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"]],
-    "shield-check":[["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z","M9 12l2 2 4-4"]],
-    zap:         [["M13 2L3 14h9l-1 8 10-12h-9l1-8z"]],
-    users:       [["M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2","M23 21v-2a4 4 0 00-3-3.87","M16 3.13a4 4 0 010 7.75","M9 7a4 4 0 100 8 4 4 0 000-8z"]],
-    "list":      [["M8 6h13","M8 12h13","M8 18h13","M3 6h.01","M3 12h.01","M3 18h.01"]],
-    "trending-up":[["M23 6l-9.5 9.5-5-5L1 18","M17 6h6v6"]],
-    "dollar-sign":[["M12 1v22","M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"]],
+  const col = color || C.text;
+  // Each entry: array of elements — strings = <path d>, objects = {tag, attrs}
+  const icons = {
+    map:          ["M3 7l6-3 6 3 6-3v13l-6 3-6-3-6 3V7z","M9 4v13","M15 7v13"],
+    parking:      [{tag:"rect",attrs:{x:3,y:3,width:18,height:18,rx:2}},"M9 17V7h4a3 3 0 010 6H9"],
+    user:         ["M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2","M12 11a4 4 0 100-8 4 4 0 000 8z"],
+    "map-pin":    ["M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z","M12 10a1 1 0 100-2 1 1 0 000 2z"],
+    navigation:   ["M3 11l19-9-9 19-2-8-8-2z"],
+    clock:        [{tag:"circle",attrs:{cx:12,cy:12,r:10}},"M12 6v6l4 2"],
+    "credit-card":[{tag:"rect",attrs:{x:1,y:4,width:22,height:16,rx:2,ry:2}},"M1 10h22"],
+    star:         ["M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"],
+    "check-circle":[{tag:"circle",attrs:{cx:12,cy:12,r:10}},"M9 12l2 2 4-4"],
+    "x-circle":   [{tag:"circle",attrs:{cx:12,cy:12,r:10}},"M15 9l-6 6M9 9l6 6"],
+    settings:     [{tag:"circle",attrs:{cx:12,cy:12,r:3}},"M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"],
+    building:     ["M3 21h18","M9 21V9h6v12","M3 9l9-6 9 6","M3 9h18"],
+    "bar-chart":  [{tag:"line",attrs:{x1:12,y1:20,x2:12,y2:10}},{tag:"line",attrs:{x1:18,y1:20,x2:18,y2:4}},{tag:"line",attrs:{x1:6,y1:20,x2:6,y2:16}}],
+    "log-out":    [{tag:"path",attrs:{d:"M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"}},"M16 17l5-5-5-5","M21 12H9"],
+    "log-in":     [{tag:"path",attrs:{d:"M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"}},"M10 17l5-5-5-5","M15 12H3"],
+    car:          ["M1 3h15l3 7H1z","M1 10v6h1m14 0h1v-6","M5 16a2 2 0 100 4 2 2 0 000-4z","M14 16a2 2 0 100 4 2 2 0 000-4z"],
+    phone:        ["M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z"],
+    mail:         [{tag:"path",attrs:{d:"M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"}},"M22 6l-10 7L2 6"],
+    gift:         ["M20 12v10H4V12","M2 7h20v5H2z","M12 22V7","M12 7H7.5a2.5 2.5 0 010-5C11 2 12 7 12 7z","M12 7h4.5a2.5 2.5 0 000-5C13 2 12 7 12 7z"],
+    calendar:     [{tag:"rect",attrs:{x:3,y:4,width:18,height:18,rx:2,ry:2}},"M16 2v4","M8 2v4","M3 10h18"],
+    search:       [{tag:"circle",attrs:{cx:11,cy:11,r:8}},"M21 21l-4.35-4.35"],
+    "x":          ["M18 6L6 18","M6 6l12 12"],
+    plus:         ["M12 5v14","M5 12h14"],
+    edit:         ["M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7","M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"],
+    "alert-triangle":["M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z","M12 9v4","M12 17h.01"],
+    info:         [{tag:"circle",attrs:{cx:12,cy:12,r:10}},"M12 16v-4","M12 8h.01"],
+    check:        ["M20 6L9 17l-5-5"],
+    "trash-2":    ["M3 6h18","M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2","M10 11v6","M14 11v6"],
+    compass:      [{tag:"circle",attrs:{cx:12,cy:12,r:10}},"M16.24 7.76l-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z"],
+    route:        [{tag:"circle",attrs:{cx:6,cy:19,r:3}},{tag:"circle",attrs:{cx:18,cy:5,r:3}},"M12 19h4.5a3.5 3.5 0 000-7h-8a3.5 3.5 0 010-7H12"],
+    sun:          [{tag:"circle",attrs:{cx:12,cy:12,r:5}},"M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"],
+    moon:         ["M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"],
+    "shield-check":["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z","M9 12l2 2 4-4"],
+    zap:          ["M13 2L3 14h9l-1 8 10-12h-9l1-8z"],
+    users:        ["M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2","M23 21v-2a4 4 0 00-3-3.87","M16 3.13a4 4 0 010 7.75","M9 11a4 4 0 100-8 4 4 0 000 8z"],
+    list:         ["M8 6h13","M8 12h13","M8 18h13","M3 6h.01","M3 12h.01","M3 18h.01"],
+    "trending-up":["M23 6l-9.5 9.5-5-5L1 18","M17 6h6v6"],
+    "dollar-sign":["M12 1v22","M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"],
+    "hash":       ["M4 9h16","M4 15h16","M10 3L8 21","M16 3l-2 18"],
+    "grid":       [{tag:"rect",attrs:{x:3,y:3,width:7,height:7}},{tag:"rect",attrs:{x:14,y:3,width:7,height:7}},{tag:"rect",attrs:{x:14,y:14,width:7,height:7}},{tag:"rect",attrs:{x:3,y:14,width:7,height:7}}],
+    "layers":     ["M12 2L2 7l10 5 10-5-10-5z","M2 17l10 5 10-5","M2 12l10 5 10-5"],
+    "tag":        ["M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z","M7 7h.01"],
   };
-  const d = paths[name];
-  if (!d) return <span style={{fontSize:size,lineHeight:1,...s}}>{name[0].toUpperCase()}</span>;
+  const elems = icons[name];
+  if (!elems) return <span style={{fontSize:size,lineHeight:1,color:col,...(s||{})}}>{name.slice(0,2).toUpperCase()}</span>;
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={col} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0,...(s||{})}}>
-      {d.map((path,i) => <path key={i} d={path}/>)}
+      {elems.map((el,i) => {
+        if (typeof el === "string") return <path key={i} d={el}/>;
+        const { tag: Tag, attrs } = el;
+        if (Tag === "circle") return <circle key={i} {...attrs}/>;
+        if (Tag === "rect") return <rect key={i} {...attrs}/>;
+        if (Tag === "line") return <line key={i} x1={attrs.x1} y1={attrs.y1} x2={attrs.x2} y2={attrs.y2}/>;
+        return <path key={i} {...attrs}/>;
+      })}
     </svg>
   );
 };
@@ -402,56 +414,146 @@ function DirectionsPanel({ spot, userLocation, directions, loading, onClose }) {
 }
 
 // ─── SPOT CARD ────────────────────────────────────────────────────────────────
-function SpotCard({ spot, onClick, onDirections }) {
+function SpotCard({ spot, onClick, onDirections, isPinned }) {
   const C = useTheme();
   const avail = spot.available_spaces ?? 0;
   const total = spot.total_spaces ?? 1;
   const color = avail===0 ? C.danger : avail<=5 ? C.warn : C.accent;
+  const pct = total > 0 ? Math.round((avail/total)*100) : 0;
+
   return (
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:15,marginBottom:9,cursor:"pointer",opacity:avail===0?0.65:1,transition:"all 0.15s"}}>
-      <div onClick={()=>onClick(spot)} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:9}}>
-        <div style={{flex:1,minWidth:0,marginRight:10}}>
-          <div style={{display:"flex",gap:5,marginBottom:5,alignItems:"center",flexWrap:"wrap"}}>
-            <Badge>{spot.type||"Parking"}</Badge>
-            <span style={{fontSize:11,color:C.muted}}>{spot.area}</span>
-          </div>
-          <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:3,lineHeight:1.3}}>{spot.name}</div>
-          <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}>
-            <Icon name="map-pin" size={11} color={C.muted}/>{spot.address}
-          </div>
-          {spot.amenities?.length > 0 && (
-            <div style={{fontSize:10,color:C.muted,marginTop:4}}>{spot.amenities.slice(0,3).join(" · ")}</div>
-          )}
+    <div style={{
+      background: isPinned ? (C.mode==="dark"?"#0D2035":"#EBF8FF") : C.card,
+      border: `1.5px solid ${isPinned ? C.accent : C.border}`,
+      borderRadius:18, padding:"0 0 12px", marginBottom:10, cursor:"pointer",
+      opacity:avail===0?0.7:1, transition:"all 0.2s",
+      boxShadow: isPinned ? `0 4px 20px ${C.accent}25` : "none",
+      overflow:"hidden",
+    }}>
+      {/* Top accent bar */}
+      <div style={{height:4,background:`linear-gradient(90deg,${color},${color}44)`,borderRadius:"18px 18px 0 0",marginBottom:12}}/>
+
+      {isPinned && (
+        <div style={{display:"flex",alignItems:"center",gap:5,padding:"0 14px",marginBottom:8}}>
+          <div style={{width:6,height:6,borderRadius:"50%",background:C.accent,boxShadow:`0 0 6px ${C.accent}`}}/>
+          <span style={{fontSize:10,fontWeight:800,color:C.accent,letterSpacing:1,textTransform:"uppercase"}}>Selected on map</span>
         </div>
-        <div style={{textAlign:"right",flexShrink:0}}>
-          <div style={{fontSize:18,fontWeight:800,color:C.accent}}>KES {spot.price_per_hour}</div>
-          <div style={{fontSize:10,color:C.muted}}>per hour</div>
-          <div style={{fontSize:11,color:C.muted,marginTop:3,display:"flex",alignItems:"center",gap:3,justifyContent:"flex-end"}}>
-            <Icon name="star" size={11} color={C.warn} strokeWidth={2}/>{spot.rating||"4.5"}
+      )}
+
+      <div onClick={()=>onClick(spot)} style={{padding:"0 14px"}}>
+        {/* Header row */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+          <div style={{flex:1,minWidth:0,marginRight:10}}>
+            <div style={{display:"flex",gap:5,marginBottom:5,alignItems:"center",flexWrap:"wrap"}}>
+              <Badge color={avail===0?C.danger:C.accent}>{spot.type||"Parking"}</Badge>
+              <span style={{fontSize:11,color:C.muted,fontWeight:600}}>{spot.area}</span>
+            </div>
+            <div style={{fontSize:16,fontWeight:800,color:C.text,marginBottom:3,lineHeight:1.3}}>{spot.name}</div>
+            <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}>
+              <Icon name="map-pin" size={12} color={C.muted} strokeWidth={2.5}/>{spot.address}
+            </div>
+            {spot.amenities?.length > 0 && (
+              <div style={{fontSize:10,color:C.muted,marginTop:4,display:"flex",gap:6,flexWrap:"wrap"}}>
+                {spot.amenities.slice(0,3).map(a=>(
+                  <span key={a} style={{background:C.inputBg,borderRadius:6,padding:"1px 6px"}}>{a}</span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            <div style={{fontSize:20,fontWeight:900,color:C.accent,letterSpacing:-0.5}}>KES {spot.price_per_hour}</div>
+            <div style={{fontSize:10,color:C.muted,marginBottom:4}}>/ hour</div>
+            <div style={{display:"flex",alignItems:"center",gap:3,justifyContent:"flex-end"}}>
+              <Icon name="star" size={12} color={C.warn} strokeWidth={2.5}/>
+              <span style={{fontSize:12,fontWeight:700,color:C.warn}}>{spot.rating||"4.5"}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Availability visual — segmented bar */}
+        <div style={{marginBottom:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+            <span style={{fontSize:11,color,fontWeight:700,display:"flex",alignItems:"center",gap:5}}>
+              <span style={{width:7,height:7,borderRadius:"50%",background:color,display:"inline-block",boxShadow:`0 0 5px ${color}`}}/>
+              {avail===0 ? "Full — no spaces" : avail<=5 ? `Only ${avail} of ${total} left` : `${avail} of ${total} spaces free`}
+            </span>
+            <span style={{fontSize:11,fontWeight:800,color}}>{pct}%</span>
+          </div>
+          <div style={{width:"100%",height:5,background:C.border,borderRadius:5,overflow:"hidden"}}>
+            <div style={{width:`${pct}%`,height:"100%",background:`linear-gradient(90deg,${color},${color}BB)`,borderRadius:5,transition:"width 0.6s ease"}}/>
           </div>
         </div>
       </div>
-      <div style={{width:"100%",height:3,background:C.border,borderRadius:3,overflow:"hidden",marginBottom:7}}>
-        <div style={{width:`${(avail/total)*100}%`,height:"100%",background:color,borderRadius:3,transition:"width 0.5s"}}/>
-      </div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-        <span style={{fontSize:11,color,fontWeight:700}}>
-          {avail===0 ? "Full" : avail<=5 ? `Only ${avail} left` : `${avail} spaces free`}
-        </span>
-        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-          <span style={{color:C.accent,fontSize:10,fontWeight:700}}>Live</span>
-          {onDirections && (
-            <button onClick={e=>{ e.stopPropagation(); onDirections(spot); }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}40`,borderRadius:20,padding:"4px 10px",fontSize:10,fontWeight:700,color:C.blue,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-              <Icon name="navigation" size={11} color={C.blue}/>Directions
-            </button>
-          )}
-        </div>
+
+      {/* Action row */}
+      <div style={{display:"flex",gap:8,padding:"8px 14px 0",borderTop:`1px solid ${C.border}`}}>
+        <button onClick={()=>onClick(spot)} style={{flex:2,padding:"9px",background:avail===0?C.inputBg:`linear-gradient(135deg,${C.accent},${C.mode==="dark"?"#00C488":"#009E6A"})`,border:"none",borderRadius:11,color:avail===0?C.muted:(C.mode==="dark"?"#0A0F1E":"#fff"),fontSize:12,fontWeight:800,cursor:avail===0?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+          <Icon name="parking" size={14} color={avail===0?C.muted:(C.mode==="dark"?"#0A0F1E":"#fff")} strokeWidth={2.5}/>
+          {avail===0 ? "Unavailable" : "Reserve Spot"}
+        </button>
+        {onDirections && (
+          <button onClick={e=>{ e.stopPropagation(); onDirections(spot); }} style={{flex:1,padding:"9px",background:C.inputBg,border:`1.5px solid ${C.blue}40`,borderRadius:11,color:C.blue,fontSize:12,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+            <Icon name="navigation" size={14} color={C.blue} strokeWidth={2.5}/>Nav
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-// ─── TIME HELPERS ─────────────────────────────────────────────────────────────
+// ─── SPOT NUMBER PICKER ───────────────────────────────────────────────────────
+function SpotNumberPicker({ total, available, selected, onSelect }) {
+  const C = useTheme();
+  // Generate mock spot numbers — in prod these would come from the backend
+  const spots = Array.from({ length: Math.min(total, 30) }, (_, i) => {
+    const num = i + 1;
+    // Simulate some spots taken — last (total-available) spots are occupied
+    const isTaken = i >= available;
+    return { num, taken: isTaken };
+  });
+
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+        <Icon name="grid" size={13} color={C.accent} strokeWidth={2.5}/>Select Your Spot Number
+      </div>
+      {/* Legend */}
+      <div style={{display:"flex",gap:14,marginBottom:10}}>
+        {[["#00B87A","Free"],["#6B7A99","Taken"],[C.accent,"Yours"]].map(([col,lbl])=>(
+          <div key={lbl} style={{display:"flex",alignItems:"center",gap:5,fontSize:10,color:C.muted}}>
+            <div style={{width:12,height:12,borderRadius:3,background:col}}/>
+            {lbl}
+          </div>
+        ))}
+      </div>
+      {/* Grid */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:6,maxHeight:160,overflowY:"auto"}}>
+        {spots.map(({ num, taken }) => {
+          const isSelected = selected === num;
+          const bg = isSelected ? C.accent : taken ? C.inputBg : `${C.accent}18`;
+          const col = isSelected ? (C.mode==="dark"?"#0A0F1E":"#fff") : taken ? C.border : C.accent;
+          const border = isSelected ? C.accent : taken ? C.border : `${C.accent}40`;
+          return (
+            <button key={num} disabled={taken} onClick={()=>onSelect(isSelected ? null : num)}
+              style={{padding:"9px 4px",borderRadius:10,border:`1.5px solid ${border}`,background:bg,color:col,fontSize:13,fontWeight:800,cursor:taken?"not-allowed":"pointer",transition:"all 0.15s",position:"relative",opacity:taken?0.45:1}}>
+              {num}
+              {isSelected && (
+                <div style={{position:"absolute",top:-4,right:-4,width:13,height:13,borderRadius:"50%",background:C.accent,border:`2px solid ${C.card}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <Icon name="check" size={7} color={C.mode==="dark"?"#0A0F1E":"#fff"} strokeWidth={3}/>
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {selected && (
+        <div style={{marginTop:9,padding:"9px 12px",background:C.accentSoft,borderRadius:10,border:`1px solid ${C.accent}30`,fontSize:12,color:C.accent,fontWeight:700,display:"flex",alignItems:"center",gap:7}}>
+          <Icon name="check-circle" size={15} color={C.accent} strokeWidth={2.5}/>Spot #{selected} reserved for you
+        </div>
+      )}
+    </div>
+  );
+}
 function getNowTime() {
   const now = new Date();
   return `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
@@ -482,6 +584,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
   const [endTime, setEndTime] = useState(addHoursToTime(nowTime, 1));
   const [plate, setPlate] = useState((user?.vehicles||[])[0]||"");
   const [phone, setPhone] = useState(user?.phone||"");
+  const [spotNumber, setSpotNumber] = useState(null);
   const [step, setStep] = useState("form");
   const [error, setError] = useState("");
 
@@ -499,9 +602,9 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
     if (hours < 0.5) return setError("Minimum parking time is 30 minutes");
     setError(""); setStep("paying");
     try {
-      const { booking } = await bookingsApi.create({ spotId:spot.id, hours:parseFloat(hours.toFixed(2)), vehiclePlate:plate.trim(), startTime, endTime });
+      const { booking } = await bookingsApi.create({ spotId:spot.id, hours:parseFloat(hours.toFixed(2)), vehiclePlate:plate.trim(), startTime, endTime, spotNumber });
       await paymentsApi.stkPush({ phone:phone.trim(), amount:booking.total_amount, bookingId:booking.id });
-      setTimeout(() => onSuccess({ ...booking, startTime, endTime, spot_lat: spot.lat, spot_lng: spot.lng }), 3500);
+      setTimeout(() => onSuccess({ ...booking, startTime, endTime, spot_lat: spot.lat, spot_lng: spot.lng, spotNumber }), 3500);
     } catch(e) {
       setError(e.response?.data?.error || "Booking failed. Please try again.");
       setStep("form");
@@ -510,7 +613,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
 
   return (
     <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.82)",backdropFilter:"blur(5px)",zIndex:200,display:"flex",alignItems:"flex-end",borderRadius:44}}>
-      <div className="slide-up" style={{width:"100%",background:C.card,borderRadius:"24px 24px 0 0",border:`1px solid ${C.border}`,padding:"22px 20px 36px",boxSizing:"border-box",maxHeight:"88%",overflowY:"auto"}}>
+      <div className="slide-up" style={{width:"100%",background:C.card,borderRadius:"24px 24px 0 0",border:`1px solid ${C.border}`,padding:"22px 20px 36px",boxSizing:"border-box",maxHeight:"90%",overflowY:"auto"}}>
 
         {step==="paying" ? (
           <div style={{textAlign:"center",padding:"28px 0"}}>
@@ -519,21 +622,23 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
             <div style={{fontSize:13,color:C.muted,marginTop:8}}>Check your phone and enter your PIN</div>
             <div style={{fontSize:15,color:C.accent,fontWeight:700,marginTop:6}}>{phone}</div>
             <div style={{fontSize:14,color:C.text,marginTop:4}}>KES {total.toLocaleString()}</div>
+            {spotNumber && <div style={{marginTop:8,fontSize:13,color:C.muted}}>Spot <span style={{color:C.accent,fontWeight:800}}>#{spotNumber}</span> held for you</div>}
           </div>
         ) : (
           <>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
               <div style={{flex:1,marginRight:10}}>
                 <div style={{fontSize:17,fontWeight:800,color:C.text}}>{spot.name}</div>
                 <div style={{fontSize:12,color:C.muted,marginTop:2,display:"flex",alignItems:"center",gap:4}}>
-                  <Icon name="map-pin" size={12} color={C.muted}/>{spot.address}
+                  <Icon name="map-pin" size={12} color={C.muted} strokeWidth={2.5}/>{spot.address}
                 </div>
                 <div style={{fontSize:12,marginTop:5,fontWeight:700,color:avail===0?C.danger:C.accent}}>
-                  {avail===0 ? "Currently Full" : `${avail} spaces available`}
+                  {avail===0 ? "Currently Full" : `${avail} of ${spot.total_spaces||"?"} spaces available`}
                 </div>
               </div>
-              <button onClick={onClose} style={{background:C.inputBg,border:`1px solid ${C.border}`,color:C.muted,width:34,height:34,borderRadius:"50%",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                <Icon name="x" size={15} color={C.muted}/>
+              <button onClick={onClose} style={{background:C.inputBg,border:`1px solid ${C.border}`,width:34,height:34,borderRadius:"50%",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <Icon name="x" size={15} color={C.text} strokeWidth={2.5}/>
               </button>
             </div>
 
@@ -545,19 +650,28 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
               <>
                 <Input label="Vehicle Plate Number" placeholder="e.g. KBX 123D" value={plate} onChange={e=>setPlate(e.target.value.toUpperCase())} style={{fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}/>
 
+                {/* Numbered spot picker */}
+                <SpotNumberPicker
+                  total={spot.total_spaces || 20}
+                  available={avail}
+                  selected={spotNumber}
+                  onSelect={setSpotNumber}
+                />
+
+                {/* Time picker */}
                 <div style={{marginBottom:16}}>
-                  <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:10}}>Parking Time</div>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:10}}>Parking Duration</div>
                   <div style={{display:"flex",gap:8,marginBottom:10}}>
                     <div style={{flex:1}}>
                       <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4}}>Start</div>
                       <input type="time" value={startTime} onChange={e=>handleStartChange(e.target.value)}
-                        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.accent}40`,borderRadius:10,padding:"10px",fontSize:15,fontWeight:700,color:C.accent,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}/>
+                        style={{width:"100%",background:C.inputBg,border:`1.5px solid ${C.accent}50`,borderRadius:10,padding:"10px",fontSize:15,fontWeight:700,color:C.accent,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}/>
                     </div>
-                    <div style={{display:"flex",alignItems:"center",paddingTop:20,color:C.muted,fontSize:20}}>→</div>
+                    <div style={{display:"flex",alignItems:"center",paddingTop:20,color:C.muted,fontSize:18,fontWeight:300}}>→</div>
                     <div style={{flex:1}}>
                       <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4}}>End</div>
                       <input type="time" value={endTime} onChange={e=>setEndTime(e.target.value)}
-                        style={{width:"100%",background:C.inputBg,border:`1px solid ${C.blue}40`,borderRadius:10,padding:"10px",fontSize:15,fontWeight:700,color:C.blue,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}/>
+                        style={{width:"100%",background:C.inputBg,border:`1.5px solid ${C.blue}50`,borderRadius:10,padding:"10px",fontSize:15,fontWeight:700,color:C.blue,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}/>
                     </div>
                   </div>
                   <div style={{display:"flex",gap:5,marginBottom:10,flexWrap:"wrap"}}>
@@ -565,7 +679,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                       const label = d < 1 ? "30 min" : `${d}hr${d>1?"s":""}`;
                       const isActive = Math.abs(hours - d) < 0.1;
                       return (
-                        <button key={d} onClick={()=>setDuration(d)} style={{padding:"5px 11px",borderRadius:20,fontSize:11,fontWeight:700,cursor:"pointer",background:isActive?C.accent:C.accentSoft,color:isActive?(C.mode==="dark"?"#0A0F1E":"#fff"):C.accent,border:`1px solid ${isActive?C.accent:C.accent+"40"}`,transition:"all 0.15s"}}>{label}</button>
+                        <button key={d} onClick={()=>setDuration(d)} style={{padding:"5px 12px",borderRadius:20,fontSize:11,fontWeight:700,cursor:"pointer",background:isActive?C.accent:C.accentSoft,color:isActive?(C.mode==="dark"?"#0A0F1E":"#fff"):C.accent,border:`1.5px solid ${isActive?C.accent:C.accent+"40"}`,transition:"all 0.15s"}}>{label}</button>
                       );
                     })}
                   </div>
@@ -579,7 +693,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                     </div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontSize:10,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5}}>Total</div>
-                      <div style={{fontSize:24,fontWeight:800,color:C.accent}}>KES {total.toLocaleString()}</div>
+                      <div style={{fontSize:26,fontWeight:900,color:C.accent,letterSpacing:-0.5}}>KES {total.toLocaleString()}</div>
                       <div style={{fontSize:10,color:C.muted}}>KES {spot.price_per_hour}/hr</div>
                     </div>
                   </div>
@@ -589,13 +703,15 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
 
                 {error && (
                   <div style={{color:C.danger,fontSize:13,marginBottom:14,padding:"11px 13px",background:`${C.danger}12`,borderRadius:9,border:`1px solid ${C.danger}30`,display:"flex",alignItems:"center",gap:8}}>
-                    <Icon name="alert-triangle" size={14} color={C.danger}/>{error}
+                    <Icon name="alert-triangle" size={15} color={C.danger} strokeWidth={2.5}/>{error}
                   </div>
                 )}
 
-                <Btn onClick={book}>Reserve & Pay KES {total.toLocaleString()}</Btn>
-                <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:10}}>
-                  Secure payment via M-Pesa · 80% goes to parking provider
+                <Btn onClick={book}>
+                  Reserve{spotNumber ? ` Spot #${spotNumber}` : ""} · Pay KES {total.toLocaleString()}
+                </Btn>
+                <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:10,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                  <Icon name="shield-check" size={13} color={C.muted} strokeWidth={2}/>Secure M-Pesa payment · 80% to provider
                 </div>
               </>
             )}
@@ -963,6 +1079,7 @@ function DriverHome({ user, spots, loading, connected }) {
   const C = useTheme();
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
   const [selected, setSelected] = useState(null);
   const [bookingSpot, setBookingSpot] = useState(null);
   const [success, setSuccess] = useState(null);
@@ -970,6 +1087,8 @@ function DriverHome({ user, spots, loading, connected }) {
   const [directionsSpot, setDirectionsSpot] = useState(null);
   const [directions, setDirections] = useState(null);
   const [directionsLoading, setDirectionsLoading] = useState(false);
+  const listRef = useRef(null);
+  const searchRef = useRef(null);
 
   useEffect(() => {
     if (!navigator.geolocation) return;
@@ -998,77 +1117,164 @@ function DriverHome({ user, spots, loading, connected }) {
         return `Continue onto ${name}`;
       };
       setDirections({ route:coords, distanceKm:(route.distance/1000).toFixed(1), durationMin:Math.round(route.duration/60), steps:route.legs[0]?.steps?.map(s=>({ instruction:s.maneuver?.instruction||cleanStep(s), distance:s.distance })) || [] });
-    } catch(e) {
-      setDirections({ error:true, steps:[] });
-    } finally { setDirectionsLoading(false); }
+    } catch(e) { setDirections({ error:true, steps:[] }); }
+    finally { setDirectionsLoading(false); }
   };
 
   const openDirections = (spot) => { setSelected(spot); fetchDirections(spot); };
   const closeDirections = () => { setDirectionsSpot(null); setDirections(null); };
-
-  const filtered = spots.filter(s => {
-    if (search) return s.name?.toLowerCase().includes(search.toLowerCase()) || s.area?.toLowerCase().includes(search.toLowerCase()) || s.address?.toLowerCase().includes(search.toLowerCase());
-    if (filter==="Available") return (s.available_spaces??0)>0;
-    if (filter==="Mall" || filter==="Office") return s.type===filter;
-    return true;
-  });
-
   const openBooking = (spot) => { setSelected(spot); setBookingSpot(spot); };
   const closeBooking = () => { setBookingSpot(null); setSelected(null); };
 
-  if (success) return <SuccessScreen booking={success} onDone={()=>setSuccess(null)}/>;
+  // When a map marker is clicked — put that spot first in the list
+  const handleMapSelect = (spot) => {
+    setSelected(spot);
+    closeDirections();
+    setSearch("");
+    setFilter("All");
+    // Scroll list to top smoothly
+    setTimeout(() => { if (listRef.current) listRef.current.scrollTo({ top: 0, behavior: "smooth" }); }, 80);
+  };
+
+  // Search suggestions — live match against name, area, address
+  const suggestions = search.trim().length >= 1
+    ? spots.filter(s =>
+        s.name?.toLowerCase().includes(search.toLowerCase()) ||
+        s.area?.toLowerCase().includes(search.toLowerCase()) ||
+        s.address?.toLowerCase().includes(search.toLowerCase())
+      ).slice(0, 5)
+    : [];
+
+  const pickSuggestion = (spot) => {
+    setSearch(spot.name);
+    setSearchFocused(false);
+    setSelected(spot);
+    setFilter("All");
+    setTimeout(() => { if (listRef.current) listRef.current.scrollTo({ top: 0, behavior: "smooth" }); }, 80);
+    searchRef.current?.blur();
+  };
+
+  // Build displayed list — if a spot is selected (from map click), pin it first
+  const baseList = spots.filter(s => {
+    if (search.trim()) return (
+      s.name?.toLowerCase().includes(search.toLowerCase()) ||
+      s.area?.toLowerCase().includes(search.toLowerCase()) ||
+      s.address?.toLowerCase().includes(search.toLowerCase())
+    );
+    if (filter === "Available") return (s.available_spaces ?? 0) > 0;
+    if (filter === "Mall" || filter === "Office") return s.type === filter;
+    return true;
+  });
+
+  const displayList = selected && !search.trim()
+    ? [selected, ...baseList.filter(s => s.id !== selected.id)]
+    : baseList;
+
+  if (success) return <SuccessScreen booking={success} onDone={() => setSuccess(null)}/>;
 
   return (
     <div style={{position:"relative",height:"100%",overflow:"hidden"}}>
-      <div style={{height:"100%",overflowY:"auto",padding:"6px 16px 20px",boxSizing:"border-box"}}>
+      <div ref={listRef} style={{height:"100%",overflowY:"auto",padding:"6px 16px 20px",boxSizing:"border-box"}}>
 
+        {/* Header */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <div>
             <div style={{fontSize:12,color:C.muted}}>Welcome back</div>
             <div style={{fontSize:22,fontWeight:800,color:C.text}}>{(user.full_name||"").split(" ")[0] || "Driver"}</div>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:5,background:C.card,border:`1px solid ${C.border}`,borderRadius:20,padding:"5px 11px"}}>
-            <div style={{width:7,height:7,borderRadius:"50%",background:connected?C.accent:C.danger,boxShadow:connected?`0 0 6px ${C.accent}`:"none"}}/>
+            <div style={{width:8,height:8,borderRadius:"50%",background:connected?C.accent:C.danger,boxShadow:connected?`0 0 7px ${C.accent}`:"none"}}/>
             <span style={{fontSize:10,fontWeight:700,color:connected?C.accent:C.muted}}>{connected?"LIVE":"OFFLINE"}</span>
           </div>
         </div>
 
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 13px",display:"flex",alignItems:"center",gap:9,marginBottom:13}}>
-          <Icon name="search" size={16} color={C.muted}/>
-          <input value={search} onChange={e=>{ setSearch(e.target.value); setFilter("All"); }} placeholder="Search parking spots…"
-            style={{background:"none",border:"none",outline:"none",fontSize:14,color:C.text,width:"100%",fontFamily:"inherit"}}/>
-          {search && <button onClick={()=>setSearch("")} style={{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center"}}>
-            <Icon name="x" size={15} color={C.muted}/>
-          </button>}
+        {/* Search with autocomplete */}
+        <div style={{position:"relative",marginBottom:13}}>
+          <div style={{background:C.card,border:`1.5px solid ${searchFocused?C.accent:C.border}`,borderRadius:searchFocused && suggestions.length>0?"12px 12px 0 0":12,padding:"10px 13px",display:"flex",alignItems:"center",gap:9,transition:"border-color 0.2s"}}>
+            <Icon name="search" size={17} color={searchFocused?C.accent:C.muted} strokeWidth={2.5}/>
+            <input
+              ref={searchRef}
+              value={search}
+              onChange={e=>{ setSearch(e.target.value); setFilter("All"); }}
+              onFocus={()=>setSearchFocused(true)}
+              onBlur={()=>setTimeout(()=>setSearchFocused(false),150)}
+              placeholder="Search parking spots, areas…"
+              style={{background:"none",border:"none",outline:"none",fontSize:14,color:C.text,width:"100%",fontFamily:"inherit"}}
+            />
+            {search && (
+              <button onClick={()=>{ setSearch(""); setSelected(null); setFilter("All"); }} style={{background:"none",border:"none",cursor:"pointer",display:"flex",alignItems:"center",padding:2}}>
+                <Icon name="x" size={16} color={C.muted} strokeWidth={2.5}/>
+              </button>
+            )}
+          </div>
+
+          {/* Suggestions dropdown */}
+          {searchFocused && suggestions.length > 0 && (
+            <div style={{position:"absolute",top:"100%",left:0,right:0,background:C.card,border:`1.5px solid ${C.accent}`,borderTop:"none",borderRadius:"0 0 14px 14px",zIndex:100,boxShadow:`0 8px 24px ${C.accent}20`,overflow:"hidden"}}>
+              {suggestions.map((s, i) => {
+                const avail = s.available_spaces ?? 0;
+                const col = avail===0?C.danger:avail<=5?C.warn:C.accent;
+                return (
+                  <button key={s.id} onMouseDown={()=>pickSuggestion(s)} style={{width:"100%",padding:"11px 14px",background:i%2===0?C.card:C.inputBg,border:"none",borderBottom:i<suggestions.length-1?`1px solid ${C.border}`:"none",cursor:"pointer",display:"flex",alignItems:"center",gap:11,textAlign:"left"}}>
+                    <div style={{width:36,height:36,borderRadius:10,background:`${col}20`,border:`1.5px solid ${col}50`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      <Icon name="map-pin" size={16} color={col} strokeWidth={2.5}/>
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:1}}>{s.name}</div>
+                      <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.area} · {s.address}</div>
+                    </div>
+                    <div style={{textAlign:"right",flexShrink:0}}>
+                      <div style={{fontSize:13,fontWeight:800,color:C.accent}}>KES {s.price_per_hour}</div>
+                      <div style={{fontSize:10,color:col,fontWeight:700}}>{avail===0?"Full":`${avail} free`}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
+        {/* Map */}
         {loading ? (
           <div style={{height:220,background:C.card,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${C.border}`,marginBottom:10}}>
             <div className="spin" style={{width:32,height:32,borderRadius:"50%",border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`}}/>
           </div>
         ) : (
-          <MapView spots={spots} selected={selected} onSelect={s=>{ setSelected(s); closeDirections(); }} userLocation={userLocation} directions={directions} onDirections={openDirections}/>
+          <MapView spots={spots} selected={selected} onSelect={handleMapSelect} userLocation={userLocation} directions={directions} onDirections={openDirections}/>
         )}
 
         {directionsSpot && <DirectionsPanel spot={directionsSpot} userLocation={userLocation} directions={directions} loading={directionsLoading} onClose={closeDirections}/>}
 
+        {/* Stats */}
         <div style={{display:"flex",gap:6,marginBottom:11}}>
-          <StatBox icon="parking" label="Locations" value={spots.length} color={C.accent}/>
+          <StatBox icon="layers" label="Locations" value={spots.length} color={C.accent}/>
           <StatBox icon="check-circle" label="Available" value={spots.filter(s=>(s.available_spaces??0)>0).length} color={C.blue}/>
-          <StatBox icon="credit-card" label="Avg/hr" value={spots.length ? `KES ${Math.round(spots.reduce((a,s)=>a+(s.price_per_hour||0),0)/spots.length)}` : "—"} color={C.warn}/>
+          <StatBox icon="tag" label="Avg/hr" value={spots.length ? `KES ${Math.round(spots.reduce((a,s)=>a+(s.price_per_hour||0),0)/spots.length)}` : "—"} color={C.warn}/>
         </div>
 
+        {/* Filters */}
         <div style={{display:"flex",gap:6,marginBottom:11,overflowX:"auto",paddingBottom:2}}>
           {["All","Mall","Office","Available"].map(f=>(
-            <button key={f} onClick={()=>{ setFilter(f); setSearch(""); }} style={{flexShrink:0,padding:"7px 14px",borderRadius:20,fontSize:12,fontWeight:700,background:filter===f?C.accent:C.card,color:filter===f?(C.mode==="dark"?"#0A0F1E":"#fff"):C.muted,border:`1px solid ${filter===f?C.accent:C.border}`,cursor:"pointer",transition:"all 0.15s"}}>{f}</button>
+            <button key={f} onClick={()=>{ setFilter(f); setSearch(""); setSelected(null); }} style={{flexShrink:0,padding:"7px 14px",borderRadius:20,fontSize:12,fontWeight:700,background:filter===f?C.accent:C.card,color:filter===f?(C.mode==="dark"?"#0A0F1E":"#fff"):C.muted,border:`1.5px solid ${filter===f?C.accent:C.border}`,cursor:"pointer",transition:"all 0.15s"}}>{f}</button>
           ))}
         </div>
 
-        <div style={{fontSize:11,color:C.muted,marginBottom:9}}>
-          {loading ? "Loading spots…" : `${filtered.length} location${filtered.length!==1?"s":""} · real-time updates`}
+        {/* List label */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
+          <span style={{fontSize:11,color:C.muted}}>
+            {loading ? "Loading…" : `${displayList.length} location${displayList.length!==1?"s":""} · real-time`}
+          </span>
+          {selected && !search && (
+            <span style={{fontSize:11,color:C.accent,fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+              <Icon name="map-pin" size={12} color={C.accent} strokeWidth={2.5}/>Pinned first
+            </span>
+          )}
         </div>
 
-        {filtered.map(s => <SpotCard key={s.id} spot={s} onClick={openBooking} onDirections={openDirections}/>)}
+        {/* Spot list */}
+        {displayList.map((s, i) => (
+          <SpotCard key={s.id} spot={s} onClick={openBooking} onDirections={openDirections} isPinned={i===0 && selected?.id===s.id && !search}/>
+        ))}
       </div>
 
       {bookingSpot && <BookingModal spot={bookingSpot} user={user} onClose={closeBooking} onSuccess={b=>{ setSuccess(b); closeBooking(); }}/>}
