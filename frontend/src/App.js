@@ -595,8 +595,8 @@ function fmtTime(t) {
   return `${h % 12 || 12}:${String(m).padStart(2,"0")} ${ampm}`;
 }
 
-// ─── BOOKING MODAL ────────────────────────────────────────────────────────────
-function BookingModal({ spot, user, onClose, onSuccess }) {
+// ─── BOOKING MODAL (wallet-aware) ────────────────────────────────────────────
+function BookingModal({ spot, user, onClose, onSuccess, walletBalance, onWalletChange }) {
   const C = useTheme();
   const nowTime = getNowTime();
   const [startTime, setStartTime] = useState(nowTime);
@@ -604,25 +604,64 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
   const [plate, setPlate] = useState((user?.vehicles||[])[0]||"");
   const [phone, setPhone] = useState(user?.phone||"");
   const [spotNumber, setSpotNumber] = useState(null);
-  const [step, setStep] = useState("form");
+  const [step, setStep] = useState("form"); // form | wallet-confirm | topup | paying | done
   const [error, setError] = useState("");
+  const [topupAmt, setTopupAmt] = useState("");
 
   const hours = timeDiffHours(startTime, endTime);
   const total = Math.round((spot.price_per_hour||0) * hours);
   const avail = spot.available_spaces ?? 0;
   const quickDurations = [0.5, 1, 2, 3, 4, 6];
 
+  const walletSuffix = walletBalance >= total ? 0 : total - walletBalance;
+  const canPayFull = walletBalance >= total;
+
   const setDuration = (hrs) => setEndTime(addHoursToTime(startTime, hrs));
   const handleStartChange = (val) => { setStartTime(val); setEndTime(addHoursToTime(val, hours)); };
 
-  const book = async () => {
+  // Step 1 — validate then go to wallet-confirm step
+  const handleReserve = () => {
     if (!plate.trim()) return setError("Please enter your vehicle plate number");
-    if (!phone.trim()) return setError("Please enter your M-Pesa phone number");
     if (hours < 0.5) return setError("Minimum parking time is 30 minutes");
+    if (!canPayFull && !phone.trim()) return setError("Enter M-Pesa number to top up the remaining balance");
+    setError("");
+    setStep("wallet-confirm");
+  };
+
+  // Step 2 — pay from wallet (+ M-Pesa top-up if short)
+  const handlePayFromWallet = async () => {
+    setStep("paying");
+    try {
+      if (!canPayFull) {
+        // Top up the shortfall via M-Pesa first
+        await paymentsApi.stkPush({ phone: phone.trim(), amount: walletSuffix, bookingId: "topup" });
+        await new Promise(r => setTimeout(r, 3500)); // wait for STK
+        // Simulate wallet top-up credit
+        await walletApi.topUp({ amount: walletSuffix, source: "mpesa" });
+      }
+      // Deduct full amount from wallet
+      await walletApi.deduct({ amount: total, description: `Parking at ${spot.name}` });
+      onWalletChange(prev => Math.max(0, prev - total));
+      // Create booking (no STK since wallet covered it)
+      const { booking } = await bookingsApi.create({
+        spotId: spot.id, hours: parseFloat(hours.toFixed(2)),
+        vehiclePlate: plate.trim(), startTime, endTime,
+        spotNumber, paymentMethod: "wallet"
+      });
+      setTimeout(() => onSuccess({ ...booking, startTime, endTime, spot_lat: spot.lat, spot_lng: spot.lng, spotNumber }), 1000);
+    } catch(e) {
+      setError(e.response?.data?.error || "Payment failed. Please try again.");
+      setStep("wallet-confirm");
+    }
+  };
+
+  // fallback — pay entirely via M-Pesa
+  const handlePayMpesa = async () => {
+    if (!phone.trim()) return setError("Enter your M-Pesa number");
     setError(""); setStep("paying");
     try {
-      const { booking } = await bookingsApi.create({ spotId:spot.id, hours:parseFloat(hours.toFixed(2)), vehiclePlate:plate.trim(), startTime, endTime, spotNumber });
-      await paymentsApi.stkPush({ phone:phone.trim(), amount:booking.total_amount, bookingId:booking.id });
+      const { booking } = await bookingsApi.create({ spotId: spot.id, hours: parseFloat(hours.toFixed(2)), vehiclePlate: plate.trim(), startTime, endTime, spotNumber });
+      await paymentsApi.stkPush({ phone: phone.trim(), amount: booking.total_amount, bookingId: booking.id });
       setTimeout(() => onSuccess({ ...booking, startTime, endTime, spot_lat: spot.lat, spot_lng: spot.lng, spotNumber }), 3500);
     } catch(e) {
       setError(e.response?.data?.error || "Booking failed. Please try again.");
@@ -634,18 +673,99 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
     <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.82)",backdropFilter:"blur(5px)",zIndex:200,display:"flex",alignItems:"flex-end",borderRadius:44}}>
       <div className="slide-up" style={{width:"100%",background:C.card,borderRadius:"24px 24px 0 0",border:`1px solid ${C.border}`,padding:"22px 20px 36px",boxSizing:"border-box",maxHeight:"90%",overflowY:"auto"}}>
 
-        {step==="paying" ? (
-          <div style={{textAlign:"center",padding:"28px 0"}}>
-            <div className="spin" style={{width:52,height:52,borderRadius:"50%",border:`4px solid ${C.border}`,borderTop:`4px solid ${C.accent}`,margin:"0 auto 20px"}}/>
-            <div style={{fontSize:18,fontWeight:800,color:C.text}}>M-Pesa STK Push Sent!</div>
-            <div style={{fontSize:13,color:C.muted,marginTop:8}}>Check your phone and enter your PIN</div>
-            <div style={{fontSize:15,color:C.accent,fontWeight:700,marginTop:6}}>{phone}</div>
+        {/* ── PAYING spinner ── */}
+        {step==="paying" && (
+          <div style={{textAlign:"center",padding:"32px 0"}}>
+            <div className="spin" style={{width:56,height:56,borderRadius:"50%",border:`4px solid ${C.border}`,borderTop:`4px solid ${C.accent}`,margin:"0 auto 20px"}}/>
+            <div style={{fontSize:18,fontWeight:800,color:C.text}}>
+              {canPayFull ? "Processing Wallet Payment…" : "Sending M-Pesa Request…"}
+            </div>
+            <div style={{fontSize:13,color:C.muted,marginTop:8}}>
+              {canPayFull ? "Deducting from your ParkSmart wallet" : "Check your phone and enter your PIN"}
+            </div>
+            {!canPayFull && <div style={{fontSize:15,color:C.accent,fontWeight:700,marginTop:6}}>{phone}</div>}
             <div style={{fontSize:14,color:C.text,marginTop:4}}>KES {total.toLocaleString()}</div>
-            {spotNumber && <div style={{marginTop:8,fontSize:13,color:C.muted}}>Spot <span style={{color:C.accent,fontWeight:800}}>#{spotNumber}</span> held for you</div>}
           </div>
-        ) : (
+        )}
+
+        {/* ── WALLET CONFIRM ── */}
+        {step==="wallet-confirm" && (
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div style={{fontSize:17,fontWeight:800,color:C.text}}>Confirm Payment</div>
+              <button onClick={()=>setStep("form")} style={{background:C.inputBg,border:`1px solid ${C.border}`,width:34,height:34,borderRadius:"50%",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                <Icon name="x" size={15} color={C.text} strokeWidth={2.5}/>
+              </button>
+            </div>
+
+            {/* Booking summary */}
+            <div style={{background:C.inputBg,borderRadius:14,padding:"14px",marginBottom:14,border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:8}}>{spot.name}</div>
+              {[
+                ["Spot", spotNumber ? `#${spotNumber}` : "Any available"],
+                ["Plate", plate],
+                ["Time", `${fmtTime(startTime)} → ${fmtTime(endTime)}`],
+                ["Duration", hours<1?"30 min":hours===Math.floor(hours)?`${hours}hr${hours>1?"s":""}`: `${Math.floor(hours)}h ${Math.round((hours%1)*60)}m`],
+                ["Total", `KES ${total.toLocaleString()}`],
+              ].map(([k,v])=>(
+                <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+                  <span style={{color:C.muted}}>{k}</span>
+                  <span style={{color:C.text,fontWeight:700,fontFamily:k==="Plate"?"monospace":"inherit"}}>{v}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Wallet balance card */}
+            <div style={{background:canPayFull?C.accentSoft:`${C.warn}12`,borderRadius:14,padding:"14px",marginBottom:14,border:`1.5px solid ${canPayFull?C.accent:C.warn}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:canPayFull?0:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:7}}>
+                  <Icon name="dollar-sign" size={17} color={canPayFull?C.accent:C.warn} strokeWidth={2.5}/>
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontWeight:600}}>ParkSmart Wallet</div>
+                    <div style={{fontSize:18,fontWeight:900,color:canPayFull?C.accent:C.warn}}>KES {walletBalance.toLocaleString()}</div>
+                  </div>
+                </div>
+                {canPayFull ? (
+                  <div style={{background:C.accent,borderRadius:20,padding:"4px 12px",fontSize:11,fontWeight:800,color:C.mode==="dark"?"#0A0F1E":"#fff"}}>Covers full amount</div>
+                ) : (
+                  <div style={{background:`${C.warn}20`,borderRadius:20,padding:"4px 12px",fontSize:11,fontWeight:800,color:C.warn}}>Insufficient</div>
+                )}
+              </div>
+              {!canPayFull && (
+                <div style={{background:C.inputBg,borderRadius:10,padding:"10px 12px",border:`1px solid ${C.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+                    <span style={{color:C.muted}}>Wallet covers</span>
+                    <span style={{color:C.accent,fontWeight:700}}>KES {walletBalance.toLocaleString()}</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:8}}>
+                    <span style={{color:C.muted}}>Top up via M-Pesa</span>
+                    <span style={{color:C.danger,fontWeight:800}}>KES {walletSuffix.toLocaleString()}</span>
+                  </div>
+                  <ValidatedInput label="M-Pesa Phone for Top-up" name="mpesaPhone" placeholder="+254 712 345 678" type="tel" value={phone} onChange={e=>setPhone(e.target.value)}/>
+                </div>
+              )}
+            </div>
+
+            {error && (
+              <div style={{color:C.danger,fontSize:13,marginBottom:12,padding:"11px 13px",background:`${C.danger}12`,borderRadius:9,border:`1px solid ${C.danger}30`,display:"flex",alignItems:"center",gap:8}}>
+                <Icon name="alert-triangle" size={15} color={C.danger} strokeWidth={2.5}/>{error}
+              </div>
+            )}
+
+            <Btn onClick={handlePayFromWallet}>
+              {canPayFull
+                ? `Pay KES ${total.toLocaleString()} from Wallet`
+                : `Top Up KES ${walletSuffix.toLocaleString()} + Pay`}
+            </Btn>
+            <button onClick={handlePayMpesa} style={{width:"100%",marginTop:8,padding:"11px",background:"transparent",border:`1.5px solid ${C.blue}`,borderRadius:12,color:C.blue,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+              Pay KES {total.toLocaleString()} fully via M-Pesa
+            </button>
+          </div>
+        )}
+
+        {/* ── MAIN FORM ── */}
+        {step==="form" && (
           <>
-            {/* Header */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
               <div style={{flex:1,marginRight:10}}>
                 <div style={{fontSize:17,fontWeight:800,color:C.text}}>{spot.name}</div>
@@ -662,24 +782,27 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
             </div>
 
             {avail === 0 ? (
-              <div style={{padding:"20px",textAlign:"center",color:C.muted,fontSize:14}}>
-                This spot is currently full. Please check back later or choose another location.
-              </div>
+              <div style={{padding:"20px",textAlign:"center",color:C.muted,fontSize:14}}>This spot is currently full.</div>
             ) : (
               <>
+                {/* Wallet balance mini banner */}
+                <div style={{background:walletBalance>0?C.accentSoft:`${C.warn}10`,borderRadius:10,padding:"9px 12px",marginBottom:14,border:`1px solid ${walletBalance>0?C.accent:C.warn}30`,display:"flex",alignItems:"center",gap:8}}>
+                  <Icon name="dollar-sign" size={14} color={walletBalance>0?C.accent:C.warn} strokeWidth={2.5}/>
+                  <span style={{fontSize:12,color:walletBalance>0?C.accent:C.warn,fontWeight:700}}>
+                    Wallet: KES {walletBalance.toLocaleString()}
+                  </span>
+                  {walletBalance >= total && <span style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>✓ Covers this booking</span>}
+                  {walletBalance < total && total > 0 && (
+                    <span style={{fontSize:10,color:C.warn,marginLeft:"auto"}}>Short by KES {(total - walletBalance).toLocaleString()}</span>
+                  )}
+                </div>
+
                 <ValidatedInput label="Vehicle Plate Number" name="plate" placeholder="e.g. KBX 123D" value={plate} onChange={e=>setPlate(e.target.value.toUpperCase())} style={{fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}/>
 
-                {/* Numbered spot picker */}
-                <SpotNumberPicker
-                  total={spot.total_spaces || 20}
-                  available={avail}
-                  selected={spotNumber}
-                  onSelect={setSpotNumber}
-                  takenSpots={spot.taken_spots || []}
-                />
+                <SpotNumberPicker total={spot.total_spaces||20} available={avail} selected={spotNumber} onSelect={setSpotNumber} takenSpots={spot.taken_spots||[]}/>
 
                 {/* Time picker */}
-                <div style={{marginBottom:16}}>
+                <div style={{marginBottom:14}}>
                   <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:10}}>Parking Duration</div>
                   <div style={{display:"flex",gap:8,marginBottom:10}}>
                     <div style={{flex:1}}>
@@ -687,7 +810,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                       <input type="time" value={startTime} onChange={e=>handleStartChange(e.target.value)}
                         style={{width:"100%",background:C.inputBg,border:`1.5px solid ${C.accent}50`,borderRadius:10,padding:"10px",fontSize:15,fontWeight:700,color:C.accent,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}/>
                     </div>
-                    <div style={{display:"flex",alignItems:"center",paddingTop:20,color:C.muted,fontSize:18,fontWeight:300}}>→</div>
+                    <div style={{display:"flex",alignItems:"center",paddingTop:20,color:C.muted,fontSize:18}}>→</div>
                     <div style={{flex:1}}>
                       <div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:4}}>End</div>
                       <input type="time" value={endTime} onChange={e=>setEndTime(e.target.value)}
@@ -695,19 +818,17 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                     </div>
                   </div>
                   <div style={{display:"flex",gap:5,marginBottom:10,flexWrap:"wrap"}}>
-                    {quickDurations.map(d => {
-                      const label = d < 1 ? "30 min" : `${d}hr${d>1?"s":""}`;
-                      const isActive = Math.abs(hours - d) < 0.1;
-                      return (
-                        <button key={d} onClick={()=>setDuration(d)} style={{padding:"5px 12px",borderRadius:20,fontSize:11,fontWeight:700,cursor:"pointer",background:isActive?C.accent:C.accentSoft,color:isActive?(C.mode==="dark"?"#0A0F1E":"#fff"):C.accent,border:`1.5px solid ${isActive?C.accent:C.accent+"40"}`,transition:"all 0.15s"}}>{label}</button>
-                      );
+                    {quickDurations.map(d=>{
+                      const label=d<1?"30 min":`${d}hr${d>1?"s":""}`;
+                      const isActive=Math.abs(hours-d)<0.1;
+                      return <button key={d} onClick={()=>setDuration(d)} style={{padding:"5px 12px",borderRadius:20,fontSize:11,fontWeight:700,cursor:"pointer",background:isActive?C.accent:C.accentSoft,color:isActive?(C.mode==="dark"?"#0A0F1E":"#fff"):C.accent,border:`1.5px solid ${isActive?C.accent:C.accent+"40"}`,transition:"all 0.15s"}}>{label}</button>;
                     })}
                   </div>
                   <div style={{background:C.inputBg,borderRadius:12,padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${C.border}`}}>
                     <div>
                       <div style={{fontSize:10,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5}}>Duration</div>
                       <div style={{fontSize:19,fontWeight:800,color:C.text,marginTop:2}}>
-                        {hours < 1 ? "30 min" : hours === Math.floor(hours) ? `${hours} hr${hours>1?"s":""}` : `${Math.floor(hours)}h ${Math.round((hours%1)*60)}m`}
+                        {hours<1?"30 min":hours===Math.floor(hours)?`${hours} hr${hours>1?"s":""}`: `${Math.floor(hours)}h ${Math.round((hours%1)*60)}m`}
                       </div>
                       <div style={{fontSize:11,color:C.muted,marginTop:1}}>{fmtTime(startTime)} → {fmtTime(endTime)}</div>
                     </div>
@@ -719,7 +840,10 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                   </div>
                 </div>
 
-                <ValidatedInput label="M-Pesa Phone Number" name="mpesaPhone" placeholder="+254 712 345 678" type="tel" value={phone} onChange={e=>setPhone(e.target.value)}/>
+                {/* Only show M-Pesa field if wallet is short */}
+                {!canPayFull && (
+                  <ValidatedInput label="M-Pesa Phone (for top-up)" name="mpesaPhone" placeholder="+254 712 345 678" type="tel" value={phone} onChange={e=>setPhone(e.target.value)}/>
+                )}
 
                 {error && (
                   <div style={{color:C.danger,fontSize:13,marginBottom:14,padding:"11px 13px",background:`${C.danger}12`,borderRadius:9,border:`1px solid ${C.danger}30`,display:"flex",alignItems:"center",gap:8}}>
@@ -727,11 +851,14 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                   </div>
                 )}
 
-                <Btn onClick={book}>
-                  Reserve{spotNumber ? ` Spot #${spotNumber}` : ""} · Pay KES {total.toLocaleString()}
+                <Btn onClick={handleReserve}>
+                  {canPayFull
+                    ? `Reserve${spotNumber?` #${spotNumber}`:""} · Pay from Wallet`
+                    : `Reserve${spotNumber?` #${spotNumber}`:""} · KES ${total.toLocaleString()}`}
                 </Btn>
                 <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:10,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
-                  <Icon name="shield-check" size={13} color={C.muted} strokeWidth={2}/>Secure M-Pesa payment · 80% to provider
+                  <Icon name="shield-check" size={13} color={C.muted} strokeWidth={2}/>
+                  {canPayFull ? "Paid from your ParkSmart wallet" : "Wallet + M-Pesa top-up · Secure payment"}
                 </div>
               </>
             )}
@@ -804,13 +931,18 @@ function SuccessScreen({ booking, onDone }) {
 }
 
 // ─── ACCOUNT SCREEN ───────────────────────────────────────────────────────────
-function AccountScreen({ user, setUser, onLogout }) {
+function AccountScreen({ user, setUser, onLogout, walletBalance, onWalletChange }) {
   const C = useTheme();
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({ fullName:user.full_name||"", phone:user.phone||"", vehicles:user.vehicles||[], currentPassword:"", newPassword:"" });
   const [vi, setVi] = useState("");
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState({ type:"", text:"" });
+  const [topupOpen, setTopupOpen] = useState(false);
+  const [topupAmt, setTopupAmt] = useState("");
+  const [topupPhone, setTopupPhone] = useState(user.phone||"");
+  const [topupLoading, setTopupLoading] = useState(false);
+  const [topupMsg, setTopupMsg] = useState({ type:"", text:"" });
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
 
   const addVehicle = () => {
@@ -835,6 +967,28 @@ function AccountScreen({ user, setUser, onLogout }) {
     } finally { setLoading(false); }
   };
 
+  const doTopup = async () => {
+    const amt = parseFloat(topupAmt);
+    if (!amt || amt < 50) return setTopupMsg({ type:"err", text:"Minimum top-up is KES 50" });
+    if (!topupPhone.trim()) return setTopupMsg({ type:"err", text:"Enter your M-Pesa number" });
+    setTopupLoading(true); setTopupMsg({ type:"", text:"" });
+    try {
+      await paymentsApi.stkPush({ phone: topupPhone.trim(), amount: amt, bookingId:"wallet-topup" });
+      // After 3s delay (simulating M-Pesa confirm) credit wallet
+      await new Promise(r => setTimeout(r, 3500));
+      onWalletChange(prev => {
+        const next = prev + amt;
+        localStorage.setItem(`ps_wallet_${user.id}`, String(next));
+        return next;
+      });
+      setTopupMsg({ type:"ok", text:`KES ${amt.toLocaleString()} added to wallet!` });
+      setTopupAmt("");
+      setTimeout(() => { setTopupOpen(false); setTopupMsg({ type:"", text:"" }); }, 2500);
+    } catch(e) {
+      setTopupMsg({ type:"err", text:"Top-up failed. Check your number and try again." });
+    } finally { setTopupLoading(false); }
+  };
+
   const profileFields = [
     ["user", "Full Name", user.full_name||"—"],
     ["mail", "Email", user.email],
@@ -843,6 +997,9 @@ function AccountScreen({ user, setUser, onLogout }) {
     ["gift", "Loyalty Points", `${user.loyalty_points||0} pts`],
     ["calendar", "Member Since", user.created_at ? new Date(user.created_at).toLocaleDateString("en-KE",{month:"long",year:"numeric"}) : "—"],
   ];
+
+  // Quick top-up amounts
+  const quickAmts = [100, 200, 500, 1000];
 
   return (
     <div style={{height:"100%",overflowY:"auto",padding:"16px 16px 80px",boxSizing:"border-box"}}>
@@ -853,7 +1010,8 @@ function AccountScreen({ user, setUser, onLogout }) {
         </button>
       </div>
 
-      <div style={{background:`linear-gradient(135deg,${C.accent}18,${C.blue}0a)`,border:`1px solid ${C.accent}25`,borderRadius:18,padding:18,marginBottom:18,display:"flex",alignItems:"center",gap:14}}>
+      {/* Profile hero */}
+      <div style={{background:`linear-gradient(135deg,${C.accent}18,${C.blue}0a)`,border:`1px solid ${C.accent}25`,borderRadius:18,padding:18,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
         <div style={{width:56,height:56,borderRadius:"50%",background:`linear-gradient(135deg,${C.accent},${C.mode==="dark"?"#00C488":"#00966A"})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:800,color:"#fff",flexShrink:0}}>
           {initials(user.full_name||"")}
         </div>
@@ -864,6 +1022,63 @@ function AccountScreen({ user, setUser, onLogout }) {
             <Icon name="gift" size={13} color={C.accent}/>{user.loyalty_points||0} loyalty points
           </div>
         </div>
+      </div>
+
+      {/* ── WALLET CARD ── */}
+      <div style={{background:`linear-gradient(135deg,${C.accent}20,${C.blue}15)`,border:`1.5px solid ${C.accent}40`,borderRadius:18,padding:"16px 18px",marginBottom:18,overflow:"hidden",position:"relative"}}>
+        {/* Decorative circle */}
+        <div style={{position:"absolute",right:-20,top:-20,width:100,height:100,borderRadius:"50%",background:`${C.accent}10`}}/>
+        <div style={{position:"absolute",right:30,bottom:-30,width:80,height:80,borderRadius:"50%",background:`${C.blue}08`}}/>
+
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",position:"relative"}}>
+          <div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:4}}>ParkSmart Wallet</div>
+            <div style={{fontSize:32,fontWeight:900,color:C.accent,letterSpacing:-1,lineHeight:1}}>KES {walletBalance.toLocaleString()}</div>
+            <div style={{fontSize:11,color:C.muted,marginTop:6}}>Available balance · instant payment</div>
+          </div>
+          <div style={{width:44,height:44,borderRadius:13,background:C.accent,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+            <Icon name="dollar-sign" size={22} color={C.mode==="dark"?"#0A0F1E":"#fff"} strokeWidth={2.5}/>
+          </div>
+        </div>
+
+        <div style={{marginTop:14,display:"flex",gap:8}}>
+          <button onClick={()=>setTopupOpen(o=>!o)} style={{flex:1,padding:"10px",background:C.accent,border:"none",borderRadius:11,color:C.mode==="dark"?"#0A0F1E":"#fff",fontSize:13,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+            <Icon name="plus" size={15} color={C.mode==="dark"?"#0A0F1E":"#fff"} strokeWidth={2.5}/>Top Up
+          </button>
+          <div style={{flex:1,padding:"10px",background:`${C.accent}15`,border:`1px solid ${C.accent}30`,borderRadius:11,textAlign:"center",fontSize:11,color:C.accent,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+            <Icon name="shield-check" size={13} color={C.accent}/>Auto-pays bookings
+          </div>
+        </div>
+
+        {/* Top-up panel */}
+        {topupOpen && (
+          <div style={{marginTop:14,background:C.card,borderRadius:14,padding:"14px",border:`1px solid ${C.border}`}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:12}}>Top Up via M-Pesa</div>
+            {/* Quick amounts */}
+            <div style={{display:"flex",gap:7,marginBottom:12,flexWrap:"wrap"}}>
+              {quickAmts.map(a=>(
+                <button key={a} onClick={()=>setTopupAmt(String(a))} style={{padding:"7px 14px",borderRadius:20,fontSize:12,fontWeight:700,cursor:"pointer",background:topupAmt===String(a)?C.accent:C.inputBg,color:topupAmt===String(a)?(C.mode==="dark"?"#0A0F1E":"#fff"):C.muted,border:`1.5px solid ${topupAmt===String(a)?C.accent:C.border}`,transition:"all 0.15s"}}>
+                  KES {a}
+                </button>
+              ))}
+            </div>
+            {/* Custom amount */}
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600,marginBottom:6,textTransform:"uppercase",letterSpacing:0.5}}>Custom Amount</div>
+              <input type="number" value={topupAmt} onChange={e=>setTopupAmt(e.target.value)} placeholder="Enter amount (KES)"
+                style={{width:"100%",background:C.inputBg,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"11px 13px",fontSize:15,color:C.text,outline:"none",fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+            <ValidatedInput label="M-Pesa Phone" name="mpesaPhone" placeholder="+254 712 345 678" type="tel" value={topupPhone} onChange={e=>setTopupPhone(e.target.value)}/>
+            {topupMsg.text && (
+              <div style={{fontSize:12,color:topupMsg.type==="ok"?C.accent:C.danger,padding:"9px 11px",background:topupMsg.type==="ok"?C.accentSoft:`${C.danger}12`,borderRadius:8,marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+                <Icon name={topupMsg.type==="ok"?"check-circle":"alert-triangle"} size={14} color={topupMsg.type==="ok"?C.accent:C.danger}/>{topupMsg.text}
+              </div>
+            )}
+            <Btn loading={topupLoading} onClick={doTopup}>
+              {topupLoading ? "Waiting for M-Pesa…" : `Top Up KES ${topupAmt||"?"}`}
+            </Btn>
+          </div>
+        )}
       </div>
 
       {editing ? (
@@ -884,10 +1099,10 @@ function AccountScreen({ user, setUser, onLogout }) {
             </div>
             <div style={{display:"flex",gap:8}}>
               <input value={vi} onChange={e=>setVi(e.target.value.toUpperCase())} onKeyDown={e=>{ if(e.key==="Enter") addVehicle(); }} placeholder="Add plate e.g. KBX 123D"
-                style={{flex:1,background:C.inputBg,border:`1.5px solid ${vi&&validate.plate&&!validate.plate(vi.toUpperCase())?C.accent:C.border}`,borderRadius:10,padding:"11px 12px",fontSize:13,color:C.text,outline:"none",fontFamily:"monospace",letterSpacing:1,textTransform:"uppercase"}}/>
+                style={{flex:1,background:C.inputBg,border:`1.5px solid ${vi&&!validate.plate(vi.toUpperCase())?C.accent:C.border}`,borderRadius:10,padding:"11px 12px",fontSize:13,color:C.text,outline:"none",fontFamily:"monospace",letterSpacing:1,textTransform:"uppercase"}}/>
               <button onClick={addVehicle} style={{background:C.accentSoft,border:`1px solid ${C.accent}`,color:C.accent,borderRadius:10,padding:"11px 15px",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>Add</button>
             </div>
-            {vi && validate.plate && validate.plate(vi.toUpperCase()) && (
+            {vi && validate.plate(vi.toUpperCase()) && (
               <div style={{fontSize:11,color:C.danger,marginTop:4,display:"flex",alignItems:"center",gap:4}}>
                 <Icon name="alert-triangle" size={11} color={C.danger} strokeWidth={2.5}/>{validate.plate(vi.toUpperCase())}
               </div>
@@ -1240,10 +1455,13 @@ function CountdownTimer({ booking, onExtraFeeTriggered }) {
 }
 
 // ─── BOOKINGS SCREEN ──────────────────────────────────────────────────────────
-function BookingsScreen({ user }) {
+function BookingsScreen({ user, walletBalance, onWalletChange }) {
   const C = useTheme();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(null);      // booking id being cancelled
+  const [confirmId, setConfirmId] = useState(null);        // id awaiting confirm dialog
+  const [refundMsg, setRefundMsg] = useState(null);        // { amount, spotName }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1254,8 +1472,45 @@ function BookingsScreen({ user }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const cancel = async (id) => {
-    try { await bookingsApi.cancel(id); load(); } catch(e) {}
+  // Determine if a booking is still cancellable (start time hasn't been reached)
+  const isCancellable = (b) => {
+    if (b.status !== "confirmed") return false;
+    const startMs = (() => {
+      if (b.start_time) {
+        if (b.start_time.includes("T")) return new Date(b.start_time).getTime();
+        const d = new Date(b.created_at);
+        const [h,m] = b.start_time.split(":").map(Number);
+        if (!isNaN(h)) { d.setHours(h,m,0,0); return d.getTime(); }
+      }
+      return new Date(b.created_at).getTime();
+    })();
+    return Date.now() < startMs;
+  };
+
+  const requestCancel = (b) => {
+    if (!isCancellable(b)) return;
+    setConfirmId(b.id);
+  };
+
+  const confirmCancel = async () => {
+    const b = bookings.find(x => x.id === confirmId);
+    if (!b) return;
+    setConfirmId(null);
+    setCancelling(b.id);
+    try {
+      await bookingsApi.cancel(b.id);
+      // Refund full amount back to wallet
+      const refundAmt = b.total_amount || 0;
+      onWalletChange(prev => {
+        const next = prev + refundAmt;
+        localStorage.setItem(`ps_wallet_${user.id}`, String(next));
+        return next;
+      });
+      setRefundMsg({ amount: refundAmt, spotName: b.spot_name });
+      setTimeout(() => setRefundMsg(null), 5000);
+      await load();
+    } catch(e) {}
+    finally { setCancelling(null); }
   };
 
   const active = bookings.filter(b => b.status==="confirmed");
@@ -1264,10 +1519,59 @@ function BookingsScreen({ user }) {
   return (
     <div style={{height:"100%",overflowY:"auto",padding:"16px 16px 80px",boxSizing:"border-box"}}>
       <div style={{fontSize:22,fontWeight:800,color:C.text,marginBottom:4}}>My Bookings</div>
-      <div style={{fontSize:12,color:C.muted,marginBottom:18}}>Live countdown for active sessions</div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:14}}>Tap a booking to manage it</div>
+
+      {/* Wallet mini-banner */}
+      <div style={{background:C.accentSoft,border:`1px solid ${C.accent}30`,borderRadius:12,padding:"11px 14px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+        <div style={{width:36,height:36,borderRadius:10,background:C.accent,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          <Icon name="dollar-sign" size={18} color={C.mode==="dark"?"#0A0F1E":"#fff"} strokeWidth={2.5}/>
+        </div>
+        <div>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600}}>ParkSmart Wallet</div>
+          <div style={{fontSize:20,fontWeight:900,color:C.accent}}>KES {walletBalance.toLocaleString()}</div>
+        </div>
+        <div style={{marginLeft:"auto",fontSize:10,color:C.muted,textAlign:"right",lineHeight:1.5}}>
+          Cancellation refunds<br/>go here instantly
+        </div>
+      </div>
+
+      {/* Refund toast */}
+      {refundMsg && (
+        <div style={{background:`${C.accent}15`,border:`1.5px solid ${C.accent}`,borderRadius:12,padding:"12px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
+          <Icon name="check-circle" size={18} color={C.accent} strokeWidth={2.5}/>
+          <div>
+            <div style={{fontSize:13,fontWeight:800,color:C.accent}}>Refund processed!</div>
+            <div style={{fontSize:12,color:C.muted}}>KES {refundMsg.amount.toLocaleString()} returned to your wallet from {refundMsg.spotName}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel confirm dialog */}
+      {confirmId && (() => {
+        const b = bookings.find(x=>x.id===confirmId);
+        return (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+            <div style={{background:C.card,borderRadius:20,padding:"24px 20px",width:"100%",maxWidth:340,border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:17,fontWeight:800,color:C.text,marginBottom:8}}>Cancel Booking?</div>
+              <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+                Your booking at <span style={{color:C.text,fontWeight:700}}>{b?.spot_name}</span> will be cancelled and{" "}
+                <span style={{color:C.accent,fontWeight:800}}>KES {(b?.total_amount||0).toLocaleString()}</span> will be refunded to your ParkSmart wallet instantly.
+              </div>
+              <div style={{background:`${C.warn}12`,border:`1px solid ${C.warn}30`,borderRadius:10,padding:"10px 12px",marginBottom:16,fontSize:12,color:C.warn,display:"flex",alignItems:"center",gap:7}}>
+                <Icon name="alert-triangle" size={14} color={C.warn} strokeWidth={2.5}/>
+                Cancellation only allowed before parking starts
+              </div>
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={()=>setConfirmId(null)} style={{flex:1,padding:"12px",background:"transparent",border:`1.5px solid ${C.border}`,borderRadius:11,color:C.muted,fontSize:13,fontWeight:700,cursor:"pointer"}}>Keep it</button>
+                <button onClick={confirmCancel} style={{flex:1,padding:"12px",background:`linear-gradient(135deg,${C.danger},#B02240)`,border:"none",borderRadius:11,color:"#fff",fontSize:13,fontWeight:800,cursor:"pointer"}}>Yes, Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {loading ? <Spinner/> : bookings.length===0 ? (
-        <div style={{textAlign:"center",padding:"50px 20px"}}>
+        <div style={{textAlign:"center",padding:"40px 20px"}}>
           <div style={{display:"flex",justifyContent:"center",marginBottom:14}}><Icon name="parking" size={48} color={C.border} strokeWidth={1}/></div>
           <div style={{fontSize:15,color:C.muted}}>No bookings yet</div>
           <div style={{fontSize:13,color:C.muted,marginTop:6}}>Find a spot and reserve it</div>
@@ -1279,27 +1583,53 @@ function BookingsScreen({ user }) {
               <div style={{fontSize:11,color:C.accent,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:9,display:"flex",alignItems:"center",gap:5}}>
                 <span style={{width:7,height:7,borderRadius:"50%",background:C.accent,display:"inline-block"}}/>Active Sessions
               </div>
-              {active.map(b => (
-                <Card key={b.id} style={{marginBottom:13,border:`1px solid ${C.accent}30`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                    <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
-                    <Badge color={C.accent}>Active</Badge>
-                  </div>
-                  <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:2}}>{b.spot_name}</div>
-                  <div style={{fontSize:12,color:C.muted,marginBottom:7,display:"flex",alignItems:"center",gap:4}}>
-                    <Icon name="map-pin" size={12} color={C.muted}/>{b.spot_address}
-                  </div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.muted,marginBottom:2}}>
-                    <span style={{display:"flex",alignItems:"center",gap:4}}><Icon name="car" size={13} color={C.muted}/>{b.vehicle_plate}</span>
-                    <span style={{display:"flex",alignItems:"center",gap:4}}><Icon name="clock" size={12} color={C.muted}/>{b.hours}hr{b.hours>1?"s":""}</span>
-                    <span style={{color:C.accent,fontWeight:700}}>KES {(b.total_amount||0).toLocaleString()}</span>
-                  </div>
-                  <CountdownTimer booking={b}/>
-                  <button onClick={()=>cancel(b.id)} style={{marginTop:11,width:"100%",padding:"9px",background:"transparent",border:`1.5px solid ${C.danger}`,borderRadius:9,color:C.danger,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                    <Icon name="trash-2" size={14} color={C.danger}/>Cancel Booking
-                  </button>
-                </Card>
-              ))}
+              {active.map(b => {
+                const cancellable = isCancellable(b);
+                const isCancelling = cancelling === b.id;
+                return (
+                  <Card key={b.id} style={{marginBottom:13,border:`1px solid ${cancellable?C.accent+"50":C.border}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                      <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
+                      <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                        {cancellable && (
+                          <span style={{fontSize:9,fontWeight:700,color:C.accent,background:C.accentSoft,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>CANCELLABLE</span>
+                        )}
+                        <Badge color={C.accent}>Active</Badge>
+                      </div>
+                    </div>
+                    <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:2}}>{b.spot_name}</div>
+                    <div style={{fontSize:12,color:C.muted,marginBottom:7,display:"flex",alignItems:"center",gap:4}}>
+                      <Icon name="map-pin" size={12} color={C.muted}/>{b.spot_address}
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.muted,marginBottom:2}}>
+                      <span style={{display:"flex",alignItems:"center",gap:4}}><Icon name="car" size={13} color={C.muted}/>{b.vehicle_plate}</span>
+                      <span style={{display:"flex",alignItems:"center",gap:4}}><Icon name="clock" size={12} color={C.muted}/>{b.hours}hr{b.hours>1?"s":""}</span>
+                      <span style={{color:C.accent,fontWeight:700}}>KES {(b.total_amount||0).toLocaleString()}</span>
+                    </div>
+                    {b.spot_number && (
+                      <div style={{fontSize:11,color:C.muted,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
+                        <Icon name="hash" size={12} color={C.muted}/>Spot #{b.spot_number}
+                      </div>
+                    )}
+                    <CountdownTimer booking={b}/>
+
+                    {cancellable ? (
+                      <button
+                        onClick={()=>requestCancel(b)}
+                        disabled={isCancelling}
+                        style={{marginTop:11,width:"100%",padding:"10px",background:`${C.danger}10`,border:`1.5px solid ${C.danger}`,borderRadius:10,color:C.danger,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                        {isCancelling
+                          ? <><div className="spin" style={{width:14,height:14,borderRadius:"50%",border:`2px solid ${C.danger}40`,borderTop:`2px solid ${C.danger}`}}/>Cancelling…</>
+                          : <><Icon name="x-circle" size={15} color={C.danger} strokeWidth={2.5}/>Cancel & Refund KES {(b.total_amount||0).toLocaleString()}</>}
+                      </button>
+                    ) : (
+                      <div style={{marginTop:10,padding:"8px 10px",background:C.inputBg,borderRadius:9,fontSize:11,color:C.muted,textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                        <Icon name="info" size={12} color={C.muted}/>Parking in progress — cancellation not available
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
             </>
           )}
 
@@ -1319,6 +1649,11 @@ function BookingsScreen({ user }) {
                     <span>{b.hours}hr{b.hours>1?"s":""}</span>
                     <span style={{fontWeight:700}}>KES {(b.total_amount||0).toLocaleString()}</span>
                   </div>
+                  {b.status==="cancelled" && (
+                    <div style={{fontSize:11,marginTop:5,display:"flex",alignItems:"center",gap:5,color:C.accent}}>
+                      <Icon name="check-circle" size={12} color={C.accent}/>KES {(b.total_amount||0).toLocaleString()} refunded to wallet
+                    </div>
+                  )}
                   <div style={{fontSize:11,color:C.muted,marginTop:4}}>
                     <span style={{color:b.payment_status==="paid"?C.accent:C.warn,fontWeight:700}}>{b.payment_status}</span>
                     {" · "}{timeAgo(b.created_at)}
@@ -1414,7 +1749,7 @@ function MapToggle({ spots, selected, onSelect, userLocation, directions, onDire
 }
 
 // ─── DRIVER HOME ──────────────────────────────────────────────────────────────
-function DriverHome({ user, spots, loading, connected }) {
+function DriverHome({ user, spots, loading, connected, walletBalance, onWalletChange }) {
   const C = useTheme();
   const [filter, setFilter] = useState("All");
   const [search, setSearch] = useState("");
@@ -1608,7 +1943,7 @@ function DriverHome({ user, spots, loading, connected }) {
         ))}
       </div>
 
-      {bookingSpot && <BookingModal spot={bookingSpot} user={user} onClose={closeBooking} onSuccess={b=>{ setSuccess(b); closeBooking(); }}/>}
+      {bookingSpot && <BookingModal spot={bookingSpot} user={user} onClose={closeBooking} walletBalance={walletBalance} onWalletChange={onWalletChange} onSuccess={b=>{ setSuccess(b); closeBooking(); }}/>}
     </div>
   );
 }
@@ -1996,6 +2331,7 @@ export default function App() {
   const [spots, setSpots] = useState([]);
   const [connected, setConnected] = useState(false);
   const [spotsLoading, setSpotsLoading] = useState(true);
+  const [walletBalance, setWalletBalance] = useState(0);
 
   useEffect(() => {
     const token = localStorage.getItem("ps_token");
@@ -2005,6 +2341,18 @@ export default function App() {
         .catch(() => { localStorage.removeItem("ps_token"); setAuthChecked(true); });
     } else { setAuthChecked(true); }
   }, []);
+
+  // Load wallet balance whenever user logs in
+  useEffect(() => {
+    if (!user || user.role !== "driver") return;
+    walletApi.get()
+      .then(d => setWalletBalance(d.balance || 0))
+      .catch(() => {
+        // Wallet API not implemented yet — use localStorage as local store
+        const saved = localStorage.getItem(`ps_wallet_${user.id}`);
+        setWalletBalance(saved ? parseFloat(saved) : 0);
+      });
+  }, [user]);
 
   useEffect(() => {
     if (!user || user.role !== "driver") return;
@@ -2017,7 +2365,14 @@ export default function App() {
     return () => { socket.off("connect"); socket.off("disconnect"); socket.off("spot:updated"); };
   }, [user]);
 
-  const logout = () => { localStorage.removeItem("ps_token"); setUser(null); setSpots([]); setSpotsLoading(true); setTab("home"); };
+  // Persist wallet balance to localStorage (fallback when API not ready)
+  useEffect(() => {
+    if (user?.role === "driver") {
+      localStorage.setItem(`ps_wallet_${user.id}`, String(walletBalance));
+    }
+  }, [walletBalance, user]);
+
+  const logout = () => { localStorage.removeItem("ps_token"); setUser(null); setSpots([]); setSpotsLoading(true); setTab("home"); setWalletBalance(0); };
 
   if (!authChecked) return (
     <div style={{display:"flex",justifyContent:"center",alignItems:"center",minHeight:"100vh",background:C.bg}}>
@@ -2049,9 +2404,9 @@ export default function App() {
             {user?.role==="driver" && (
               <>
                 <div style={{flex:1,overflow:"hidden",position:"relative"}}>
-                  {tab==="home"     && <DriverHome user={user} spots={spots} loading={spotsLoading} connected={connected}/>}
-                  {tab==="bookings" && <BookingsScreen user={user}/>}
-                  {tab==="account"  && <AccountScreen user={user} setUser={setUser} onLogout={logout}/>}
+                  {tab==="home"     && <DriverHome user={user} spots={spots} loading={spotsLoading} connected={connected} walletBalance={walletBalance} onWalletChange={setWalletBalance}/>}
+                  {tab==="bookings" && <BookingsScreen user={user} walletBalance={walletBalance} onWalletChange={setWalletBalance}/>}
+                  {tab==="account"  && <AccountScreen user={user} setUser={setUser} onLogout={logout} walletBalance={walletBalance} onWalletChange={setWalletBalance}/>}
                 </div>
 
                 <div style={{background:C.navBg,borderTop:`1px solid ${C.border}`,display:"flex",height:68,paddingBottom:8,flexShrink:0}}>
