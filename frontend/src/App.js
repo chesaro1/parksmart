@@ -1144,146 +1144,104 @@ function AccountScreen({ user, setUser, onLogout, walletBalance, onWalletChange 
   );
 }
 
-// ─── PARKING LIFECYCLE STATES ────────────────────────────────────────────────
-// pending   → booking exists, start time not yet reached
-// pre-warn  → 5 min before start time
-// active    → parking time running
-// expiring  → last 10 min of booked time
-// overdue-grace → extra fee charged, 15 min grace window (once)
-// grace     → paid overdue fee, 5-min allowance
-// overstay  → 5-min grace elapsed, barrier holds car
-// done      → exited
+// ─── PARKING LIFECYCLE ────────────────────────────────────────────────────────
+function resolveBookingTimes(booking) {
+  const createdAt = new Date(booking.created_at).getTime();
+
+  const toMs = (field, fallbackMs) => {
+    const val = booking[field];
+    if (!val) return fallbackMs;
+    if (typeof val === "string" && (val.includes("T") || val.includes("Z")))
+      return new Date(val).getTime();
+    if (typeof val === "string" && val.includes(":")) {
+      const [h, m] = val.split(":").map(Number);
+      if (isNaN(h)) return fallbackMs;
+      const d = new Date(createdAt);
+      d.setHours(h, m, 0, 0);
+      return d.getTime();
+    }
+    return fallbackMs;
+  };
+
+  const startMs = toMs("start_time", createdAt);
+  let endMs = toMs("end_time", startMs + (booking.hours || 1) * 3600 * 1000);
+  if (endMs <= startMs) endMs += 24 * 3600 * 1000;
+  return { startMs, endMs };
+}
 
 function useParkingLifecycle(booking) {
-  const [state, setState] = useState("pending");
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
   const [extraFeePaid, setExtraFeePaid] = useState(false);
   const [gracePaidAt, setGracePaidAt] = useState(null);
 
+  // Always tick — we need the countdown to update in real time
   useEffect(() => {
-    if (booking.status !== "confirmed" || booking.payment_status !== "paid") return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [booking]);
+  }, []);
 
-  useEffect(() => {
-    if (booking.status !== "confirmed" || booking.payment_status !== "paid") return;
+  const { startMs, endMs } = resolveBookingTimes(booking);
 
-    // Resolve start and end timestamps from booking
-    const startMs = (() => {
-      if (booking.start_time) {
-        // start_time may be HH:MM string or ISO
-        if (booking.start_time.includes("T")) return new Date(booking.start_time).getTime();
-        // HH:MM relative to created_at date
-        const d = new Date(booking.created_at);
-        const [h,m] = booking.start_time.split(":").map(Number);
-        d.setHours(h, m, 0, 0);
-        return d.getTime();
-      }
-      return new Date(booking.created_at).getTime();
-    })();
+  const totalDurationMs = endMs - startMs;
+  // Never let expiringMs go before startMs (e.g. for short 30-min bookings)
+  const expiringMs  = Math.max(startMs, endMs - 10 * 60 * 1000);
+  const preWarnMs   = startMs - 5 * 60 * 1000;
+  const overdueEndMs = endMs + 15 * 60 * 1000;
+  const graceEndMs  = gracePaidAt ? gracePaidAt + 5 * 60 * 1000 : null;
 
-    const endMs = (() => {
-      if (booking.end_time) {
-        if (booking.end_time.includes("T")) return new Date(booking.end_time).getTime();
-        const d = new Date(booking.created_at);
-        const [h,m] = booking.end_time.split(":").map(Number);
-        d.setHours(h, m, 0, 0);
-        if (d.getTime() <= startMs) d.setDate(d.getDate()+1);
-        return d.getTime();
-      }
-      return startMs + (booking.hours||1)*3600*1000;
-    })();
+  // Determine state purely from now vs timestamps
+  let state;
+  if      (now < preWarnMs)                                  state = "pending";
+  else if (now < startMs)                                    state = "pre-warn";
+  else if (now < expiringMs)                                 state = "active";
+  else if (now < endMs)                                      state = "expiring";
+  else if (!extraFeePaid && now < overdueEndMs)              state = "overdue-grace";
+  else if (extraFeePaid && graceEndMs && now < graceEndMs)   state = "grace";
+  else                                                        state = "overstay";
 
-    const preWarnMs = startMs - 5*60*1000;       // 5 min before start
-    const expiringMs = endMs - 10*60*1000;        // last 10 min
-    const overdueEndMs = endMs + 15*60*1000;      // 15 min grace window
-    const graceEndMs = gracePaidAt ? gracePaidAt + 5*60*1000 : null;
-
-    const t = now;
-    if (t < preWarnMs) setState("pending");
-    else if (t < startMs) setState("pre-warn");
-    else if (t < expiringMs) setState("active");
-    else if (t < endMs) setState("expiring");
-    else if (!extraFeePaid && t < overdueEndMs) setState("overdue-grace");
-    else if (extraFeePaid && graceEndMs && t < graceEndMs) setState("grace");
-    else if (extraFeePaid && graceEndMs && t >= graceEndMs) setState("overstay");
-    else if (!extraFeePaid && t >= overdueEndMs) setState("overstay");
-    else setState("active");
-
-  }, [now, booking, extraFeePaid, gracePaidAt]);
-
-  const startMs = (() => {
-    if (booking.start_time) {
-      if (typeof booking.start_time === "string" && booking.start_time.includes("T"))
-        return new Date(booking.start_time).getTime();
-      const d = new Date(booking.created_at);
-      const [h,m] = (booking.start_time||"").split(":").map(Number);
-      if (!isNaN(h)) { d.setHours(h, m, 0, 0); return d.getTime(); }
-    }
-    return new Date(booking.created_at).getTime();
-  })();
-
-  const endMs = (() => {
-    if (booking.end_time) {
-      if (typeof booking.end_time === "string" && booking.end_time.includes("T"))
-        return new Date(booking.end_time).getTime();
-      const d = new Date(booking.created_at);
-      const [h,m] = (booking.end_time||"").split(":").map(Number);
-      if (!isNaN(h)) {
-        d.setHours(h, m, 0, 0);
-        if (d.getTime() <= startMs) d.setDate(d.getDate()+1);
-        return d.getTime();
-      }
-    }
-    return startMs + (booking.hours||1)*3600*1000;
-  })();
-
-  return { state, now, startMs, endMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt };
+  return { state, now, startMs, endMs, totalDurationMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt };
 }
 
 // ─── SMART COUNTDOWN TIMER ───────────────────────────────────────────────────
 function CountdownTimer({ booking, onExtraFeeTriggered }) {
   const C = useTheme();
-  const { state, now, startMs, endMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt } = useParkingLifecycle(booking);
+  const { state, now, startMs, endMs, totalDurationMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt } = useParkingLifecycle(booking);
   const [extraFeePrompt, setExtraFeePrompt] = useState(false);
   const [leaveTime, setLeaveTime] = useState("");
   const [extraFeeTriggeredOnce, setExtraFeeTriggeredOnce] = useState(false);
 
-  // Trigger extra fee prompt once when entering overdue-grace
+  // Trigger extra fee prompt exactly once on entry to overdue-grace
   useEffect(() => {
-    if (state === "overdue-grace" && !extraFeeTriggeredOnce && !extraFeePaid) {
+    if (state === "overdue-grace" && !extraFeeTriggeredOnce) {
       setExtraFeeTriggeredOnce(true);
       setExtraFeePrompt(true);
-      // Pre-fill leave time to 15 min from now
-      const d = new Date(Date.now() + 15*60*1000);
+      const d = new Date(Date.now() + 15 * 60 * 1000);
       setLeaveTime(`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`);
       if (onExtraFeeTriggered) onExtraFeeTriggered(booking);
     }
-  }, [state, extraFeeTriggeredOnce, extraFeePaid]);
+  }, [state]);
 
   const handlePayExtraFee = () => {
-    // Calculate extra fee based on proposed leave time
-    const now = Date.now();
+    const nowMs = Date.now();
     const leaveMs = leaveTime
-      ? (() => { const d = new Date(); const [h,m] = leaveTime.split(":").map(Number); d.setHours(h,m,0,0); if(d.getTime() < now) d.setDate(d.getDate()+1); return d.getTime(); })()
+      ? (() => { const d = new Date(); const [h,m] = leaveTime.split(":").map(Number); d.setHours(h,m,0,0); if (d.getTime() < nowMs) d.setDate(d.getDate()+1); return d.getTime(); })()
       : endMs + 15*60*1000;
     const overMins = Math.max(15, Math.ceil((leaveMs - endMs) / 60000));
-    const rate = (booking.price_per_hour || booking.total_amount / booking.hours) || 100;
-    const extraFee = Math.ceil((overMins / 60) * rate * 1.5); // 1.5x for overstay
+    const rate = (booking.price_per_hour || (booking.total_amount / (booking.hours || 1))) || 100;
+    const extraFee = Math.ceil((overMins / 60) * rate * 1.5);
     setExtraFeePrompt(false);
     setExtraFeePaid(true);
     setGracePaidAt(Date.now());
     if (onExtraFeeTriggered) onExtraFeeTriggered(booking, extraFee, overMins);
   };
 
-  if (booking.status !== "confirmed" || booking.payment_status !== "paid") return null;
+  // Don't render anything for non-confirmed bookings
+  if (booking.status !== "confirmed") return null;
 
-  const pad = n => String(n).padStart(2,"0");
+  const pad = n => String(Math.max(0,n)).padStart(2,"0");
   const fmtMs = ms => {
-    const s = Math.max(0, Math.floor(ms/1000));
-    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
-    return { h, m, sec, total: s };
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return { h: Math.floor(s/3600), m: Math.floor((s%3600)/60), sec: s%60, total: s };
   };
 
   // ── PENDING: show pre-start countdown ──
@@ -1314,11 +1272,10 @@ function CountdownTimer({ booking, onExtraFeeTriggered }) {
   // ── ACTIVE / EXPIRING: main countdown ──
   if (state === "active" || state === "expiring") {
     const diff = endMs - now;
-    const { h, m, sec, total } = fmtMs(diff);
-    const totalDuration = (booking.hours||1)*3600;
-    const pct = Math.min(100,(total/totalDuration)*100);
+    const { h, m, sec } = fmtMs(diff);
+    const pct = Math.min(100, Math.max(0, (diff / totalDurationMs) * 100));
     const isExpiring = state === "expiring";
-    const timerColor = isExpiring ? C.danger : pct < 50 ? C.warn : C.accent;
+    const timerColor = isExpiring ? C.danger : pct < 30 ? C.warn : C.accent;
     const r = 28, circ = 2*Math.PI*r, dash = (pct/100)*circ;
 
     return (
@@ -1704,9 +1661,12 @@ const ValidatedInput = ({ label, name, value, onChange, placeholder, type="text"
 };
 
 // ─── MAP TOGGLE (collapsible) ─────────────────────────────────────────────────
-function MapToggle({ spots, selected, onSelect, userLocation, directions, onDirections, loading, directionsSpot, directionsLoading, onCloseDirections }) {
+function MapToggle({ spots, selected, onSelect, userLocation, directions, onDirections, loading, directionsSpot, directionsLoading, onCloseDirections, forceClose }) {
   const C = useTheme();
   const [open, setOpen] = useState(false);
+
+  // Collapse map whenever booking modal opens
+  useEffect(() => { if (forceClose) setOpen(false); }, [forceClose]);
 
   return (
     <div style={{marginBottom:11}}>
@@ -1909,7 +1869,7 @@ function DriverHome({ user, spots, loading, connected, walletBalance, onWalletCh
         </div>
 
         {/* Map — collapsible so it doesn't block the list */}
-        <MapToggle spots={spots} selected={selected} onSelect={handleMapSelect} userLocation={userLocation} directions={directions} onDirections={openDirections} loading={loading} directionsSpot={directionsSpot} directionsLoading={directionsLoading} onCloseDirections={closeDirections}/>
+        <MapToggle spots={spots} selected={selected} onSelect={handleMapSelect} userLocation={userLocation} directions={directions} onDirections={openDirections} loading={loading} directionsSpot={directionsSpot} directionsLoading={directionsLoading} onCloseDirections={closeDirections} forceClose={!!bookingSpot}/>
 
         {/* Stats */}
         <div style={{display:"flex",gap:6,marginBottom:11}}>
