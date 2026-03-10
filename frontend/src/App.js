@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
-import { getSocket, authApi, spotsApi, bookingsApi, paymentsApi, providerApi, adminApi } from "./services";
+import { getSocket, authApi, spotsApi, bookingsApi, paymentsApi, providerApi, adminApi, walletApi } from "./services";
 import "./App.css";
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
@@ -219,13 +219,13 @@ function AuthScreen({ onAuth }) {
               </button>
             ))}
           </div>
-          <Input label="Full Name" placeholder="James Mwangi" value={form.fullName} onChange={e=>set("fullName",e.target.value)}/>
-          <Input label="Phone Number" placeholder="+254 712 345 678" type="tel" value={form.phone} onChange={e=>set("phone",e.target.value)}/>
+          <ValidatedInput label="Full Name" name="fullName" placeholder="James Mwangi" value={form.fullName} onChange={e=>set("fullName",e.target.value)}/>
+          <ValidatedInput label="Phone Number" name="phone" placeholder="+254 712 345 678" type="tel" value={form.phone} onChange={e=>set("phone",e.target.value)}/>
         </>
       )}
 
-      <Input label="Email Address" placeholder="james@email.com" type="email" value={form.email} onChange={e=>set("email",e.target.value)}/>
-      <Input label="Password" placeholder="Min. 6 characters" type="password" value={form.password} onChange={e=>set("password",e.target.value)}/>
+      <ValidatedInput label="Email Address" name="email" placeholder="james@email.com" type="email" value={form.email} onChange={e=>set("email",e.target.value)}/>
+      <ValidatedInput label="Password" name="password" placeholder="Min. 6 characters" type="password" value={form.password} onChange={e=>set("password",e.target.value)}/>
 
       {error && (
         <div style={{color:C.danger,fontSize:13,marginBottom:14,padding:"11px 13px",background:`${C.danger}12`,borderRadius:9,border:`1px solid ${C.danger}30`,display:"flex",alignItems:"center",gap:8}}>
@@ -502,54 +502,73 @@ function SpotCard({ spot, onClick, onDirections, isPinned }) {
 }
 
 // ─── SPOT NUMBER PICKER ───────────────────────────────────────────────────────
-function SpotNumberPicker({ total, available, selected, onSelect }) {
+// takenSpots: array of numbers already reserved (passed in from parent / backend)
+function SpotNumberPicker({ total, available, selected, onSelect, takenSpots = [] }) {
   const C = useTheme();
-  // Generate mock spot numbers — in prod these would come from the backend
-  const spots = Array.from({ length: Math.min(total, 30) }, (_, i) => {
-    const num = i + 1;
-    // Simulate some spots taken — last (total-available) spots are occupied
-    const isTaken = i >= available;
-    return { num, taken: isTaken };
-  });
+  const count = Math.min(total || 20, 40);
+  // Build grid: slots 1..count. Last (total - available) slots beyond takenSpots are "soft-taken"
+  const takenSet = new Set(takenSpots.map(Number));
+  // Fill remaining taken slots from the end if takenSpots < (total - available)
+  const hardTaken = total - available;
+  const autoTaken = new Set(takenSet);
+  if (autoTaken.size < hardTaken) {
+    for (let i = count; i >= 1 && autoTaken.size < hardTaken; i--) {
+      autoTaken.add(i);
+    }
+  }
 
   return (
     <div style={{marginBottom:16}}>
       <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
-        <Icon name="grid" size={13} color={C.accent} strokeWidth={2.5}/>Select Your Spot Number
+        <Icon name="grid" size={13} color={C.accent} strokeWidth={2.5}/>Choose Spot Number
+        <span style={{marginLeft:"auto",fontSize:10,color:C.muted,fontWeight:500,textTransform:"none"}}>{available} of {total} free</span>
       </div>
       {/* Legend */}
       <div style={{display:"flex",gap:14,marginBottom:10}}>
-        {[["#00B87A","Free"],["#6B7A99","Taken"],[C.accent,"Yours"]].map(([col,lbl])=>(
+        {[[C.accent,"Available"],[C.inputBg,"Taken"],[C.blue,"Yours"]].map(([col,lbl])=>(
           <div key={lbl} style={{display:"flex",alignItems:"center",gap:5,fontSize:10,color:C.muted}}>
-            <div style={{width:12,height:12,borderRadius:3,background:col}}/>
+            <div style={{width:12,height:12,borderRadius:3,background:col,border:`1px solid ${col}60`}}/>
             {lbl}
           </div>
         ))}
       </div>
       {/* Grid */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:6,maxHeight:160,overflowY:"auto"}}>
-        {spots.map(({ num, taken }) => {
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:6,maxHeight:170,overflowY:"auto",paddingRight:2}}>
+        {Array.from({length:count},(_,i)=>i+1).map(num => {
+          const taken = autoTaken.has(num) && num !== selected;
           const isSelected = selected === num;
-          const bg = isSelected ? C.accent : taken ? C.inputBg : `${C.accent}18`;
-          const col = isSelected ? (C.mode==="dark"?"#0A0F1E":"#fff") : taken ? C.border : C.accent;
-          const border = isSelected ? C.accent : taken ? C.border : `${C.accent}40`;
           return (
             <button key={num} disabled={taken} onClick={()=>onSelect(isSelected ? null : num)}
-              style={{padding:"9px 4px",borderRadius:10,border:`1.5px solid ${border}`,background:bg,color:col,fontSize:13,fontWeight:800,cursor:taken?"not-allowed":"pointer",transition:"all 0.15s",position:"relative",opacity:taken?0.45:1}}>
+              style={{
+                aspectRatio:"1",padding:"8px 2px",borderRadius:10,
+                border:`1.5px solid ${isSelected?C.blue:taken?C.border:`${C.accent}50`}`,
+                background:isSelected?C.blue:taken?C.inputBg:`${C.accent}12`,
+                color:isSelected?"#fff":taken?C.border:C.accent,
+                fontSize:13,fontWeight:800,cursor:taken?"not-allowed":"pointer",
+                transition:"all 0.15s",position:"relative",opacity:taken?0.4:1,
+              }}>
               {num}
               {isSelected && (
-                <div style={{position:"absolute",top:-4,right:-4,width:13,height:13,borderRadius:"50%",background:C.accent,border:`2px solid ${C.card}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                  <Icon name="check" size={7} color={C.mode==="dark"?"#0A0F1E":"#fff"} strokeWidth={3}/>
+                <div style={{position:"absolute",top:-5,right:-5,width:14,height:14,borderRadius:"50%",background:C.accent,border:`2px solid ${C.card}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <Icon name="check" size={8} color={C.mode==="dark"?"#0A0F1E":"#fff"} strokeWidth={3}/>
+                </div>
+              )}
+              {taken && (
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:10}}>
+                  <Icon name="x" size={12} color={C.border} strokeWidth={2.5}/>
                 </div>
               )}
             </button>
           );
         })}
       </div>
-      {selected && (
-        <div style={{marginTop:9,padding:"9px 12px",background:C.accentSoft,borderRadius:10,border:`1px solid ${C.accent}30`,fontSize:12,color:C.accent,fontWeight:700,display:"flex",alignItems:"center",gap:7}}>
-          <Icon name="check-circle" size={15} color={C.accent} strokeWidth={2.5}/>Spot #{selected} reserved for you
+      {selected ? (
+        <div style={{marginTop:9,padding:"9px 12px",background:`${C.blue}15`,borderRadius:10,border:`1px solid ${C.blue}40`,fontSize:12,color:C.blue,fontWeight:700,display:"flex",alignItems:"center",gap:7}}>
+          <Icon name="check-circle" size={15} color={C.blue} strokeWidth={2.5}/>
+          Spot <span style={{fontSize:14,fontWeight:900,margin:"0 3px"}}>#{selected}</span> locked for you · unavailable to others until you exit
         </div>
+      ) : (
+        <div style={{marginTop:7,fontSize:11,color:C.muted,textAlign:"center"}}>Tap a green slot to select your space</div>
       )}
     </div>
   );
@@ -648,7 +667,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
               </div>
             ) : (
               <>
-                <Input label="Vehicle Plate Number" placeholder="e.g. KBX 123D" value={plate} onChange={e=>setPlate(e.target.value.toUpperCase())} style={{fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}/>
+                <ValidatedInput label="Vehicle Plate Number" name="plate" placeholder="e.g. KBX 123D" value={plate} onChange={e=>setPlate(e.target.value.toUpperCase())} style={{fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}/>
 
                 {/* Numbered spot picker */}
                 <SpotNumberPicker
@@ -656,6 +675,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                   available={avail}
                   selected={spotNumber}
                   onSelect={setSpotNumber}
+                  takenSpots={spot.taken_spots || []}
                 />
 
                 {/* Time picker */}
@@ -699,7 +719,7 @@ function BookingModal({ spot, user, onClose, onSuccess }) {
                   </div>
                 </div>
 
-                <Input label="M-Pesa Phone Number" placeholder="+254 712 345 678" type="tel" value={phone} onChange={e=>setPhone(e.target.value)}/>
+                <ValidatedInput label="M-Pesa Phone Number" name="mpesaPhone" placeholder="+254 712 345 678" type="tel" value={phone} onChange={e=>setPhone(e.target.value)}/>
 
                 {error && (
                   <div style={{color:C.danger,fontSize:13,marginBottom:14,padding:"11px 13px",background:`${C.danger}12`,borderRadius:9,border:`1px solid ${C.danger}30`,display:"flex",alignItems:"center",gap:8}}>
@@ -848,8 +868,8 @@ function AccountScreen({ user, setUser, onLogout }) {
 
       {editing ? (
         <div>
-          <Input label="Full Name" value={form.fullName} onChange={e=>set("fullName",e.target.value)} placeholder="Your full name"/>
-          <Input label="Phone Number" value={form.phone} onChange={e=>set("phone",e.target.value)} type="tel" placeholder="+254 712 345 678"/>
+          <ValidatedInput label="Full Name" name="fullName" value={form.fullName} onChange={e=>set("fullName",e.target.value)} placeholder="Your full name"/>
+          <ValidatedInput label="Phone Number" name="phone" value={form.phone} onChange={e=>set("phone",e.target.value)} type="tel" placeholder="+254 712 345 678"/>
           <div style={{marginBottom:16}}>
             <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:8}}>My Vehicles</div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
@@ -863,15 +883,20 @@ function AccountScreen({ user, setUser, onLogout }) {
               ))}
             </div>
             <div style={{display:"flex",gap:8}}>
-              <input value={vi} onChange={e=>setVi(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") addVehicle(); }} placeholder="Add plate e.g. KBX 123D"
-                style={{flex:1,background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 12px",fontSize:13,color:C.text,outline:"none",fontFamily:"monospace",letterSpacing:1,textTransform:"uppercase"}}/>
+              <input value={vi} onChange={e=>setVi(e.target.value.toUpperCase())} onKeyDown={e=>{ if(e.key==="Enter") addVehicle(); }} placeholder="Add plate e.g. KBX 123D"
+                style={{flex:1,background:C.inputBg,border:`1.5px solid ${vi&&validate.plate&&!validate.plate(vi.toUpperCase())?C.accent:C.border}`,borderRadius:10,padding:"11px 12px",fontSize:13,color:C.text,outline:"none",fontFamily:"monospace",letterSpacing:1,textTransform:"uppercase"}}/>
               <button onClick={addVehicle} style={{background:C.accentSoft,border:`1px solid ${C.accent}`,color:C.accent,borderRadius:10,padding:"11px 15px",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>Add</button>
             </div>
+            {vi && validate.plate && validate.plate(vi.toUpperCase()) && (
+              <div style={{fontSize:11,color:C.danger,marginTop:4,display:"flex",alignItems:"center",gap:4}}>
+                <Icon name="alert-triangle" size={11} color={C.danger} strokeWidth={2.5}/>{validate.plate(vi.toUpperCase())}
+              </div>
+            )}
           </div>
           <Card style={{marginBottom:16}}>
             <div style={{fontSize:11,fontWeight:700,color:C.muted,marginBottom:12,letterSpacing:0.8,textTransform:"uppercase"}}>Change Password</div>
             <Input label="Current Password" type="password" placeholder="Current password" value={form.currentPassword} onChange={e=>set("currentPassword",e.target.value)}/>
-            <Input label="New Password" type="password" placeholder="New password (min 6 chars)" value={form.newPassword} onChange={e=>set("newPassword",e.target.value)}/>
+            <ValidatedInput label="New Password" name="password" type="password" placeholder="New password (min 6 chars)" value={form.newPassword} onChange={e=>set("newPassword",e.target.value)}/>
           </Card>
           {msg.text && (
             <div style={{color:msg.type==="ok"?C.accent:C.danger,fontSize:13,marginBottom:14,padding:"11px 13px",background:msg.type==="ok"?C.accentSoft:`${C.danger}12`,borderRadius:9,display:"flex",alignItems:"center",gap:8}}>
@@ -904,80 +929,314 @@ function AccountScreen({ user, setUser, onLogout }) {
   );
 }
 
-// ─── COUNTDOWN HOOK ───────────────────────────────────────────────────────────
-function useCountdown(booking) {
-  const [remaining, setRemaining] = useState(null);
+// ─── PARKING LIFECYCLE STATES ────────────────────────────────────────────────
+// pending   → booking exists, start time not yet reached
+// pre-warn  → 5 min before start time
+// active    → parking time running
+// expiring  → last 10 min of booked time
+// overdue-grace → extra fee charged, 15 min grace window (once)
+// grace     → paid overdue fee, 5-min allowance
+// overstay  → 5-min grace elapsed, barrier holds car
+// done      → exited
+
+function useParkingLifecycle(booking) {
+  const [state, setState] = useState("pending");
+  const [now, setNow] = useState(Date.now());
+  const [extraFeePaid, setExtraFeePaid] = useState(false);
+  const [gracePaidAt, setGracePaidAt] = useState(null);
+
   useEffect(() => {
     if (booking.status !== "confirmed" || booking.payment_status !== "paid") return;
-    const getEndMs = () => {
-      if (booking.end_time) return new Date(booking.end_time).getTime();
-      return new Date(booking.created_at).getTime() + (booking.hours||1)*60*60*1000;
-    };
-    const tick = () => { const diff = getEndMs() - Date.now(); setRemaining(diff > 0 ? diff : 0); };
-    tick();
-    const id = setInterval(tick, 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [booking]);
-  return remaining;
+
+  useEffect(() => {
+    if (booking.status !== "confirmed" || booking.payment_status !== "paid") return;
+
+    // Resolve start and end timestamps from booking
+    const startMs = (() => {
+      if (booking.start_time) {
+        // start_time may be HH:MM string or ISO
+        if (booking.start_time.includes("T")) return new Date(booking.start_time).getTime();
+        // HH:MM relative to created_at date
+        const d = new Date(booking.created_at);
+        const [h,m] = booking.start_time.split(":").map(Number);
+        d.setHours(h, m, 0, 0);
+        return d.getTime();
+      }
+      return new Date(booking.created_at).getTime();
+    })();
+
+    const endMs = (() => {
+      if (booking.end_time) {
+        if (booking.end_time.includes("T")) return new Date(booking.end_time).getTime();
+        const d = new Date(booking.created_at);
+        const [h,m] = booking.end_time.split(":").map(Number);
+        d.setHours(h, m, 0, 0);
+        if (d.getTime() <= startMs) d.setDate(d.getDate()+1);
+        return d.getTime();
+      }
+      return startMs + (booking.hours||1)*3600*1000;
+    })();
+
+    const preWarnMs = startMs - 5*60*1000;       // 5 min before start
+    const expiringMs = endMs - 10*60*1000;        // last 10 min
+    const overdueEndMs = endMs + 15*60*1000;      // 15 min grace window
+    const graceEndMs = gracePaidAt ? gracePaidAt + 5*60*1000 : null;
+
+    const t = now;
+    if (t < preWarnMs) setState("pending");
+    else if (t < startMs) setState("pre-warn");
+    else if (t < expiringMs) setState("active");
+    else if (t < endMs) setState("expiring");
+    else if (!extraFeePaid && t < overdueEndMs) setState("overdue-grace");
+    else if (extraFeePaid && graceEndMs && t < graceEndMs) setState("grace");
+    else if (extraFeePaid && graceEndMs && t >= graceEndMs) setState("overstay");
+    else if (!extraFeePaid && t >= overdueEndMs) setState("overstay");
+    else setState("active");
+
+  }, [now, booking, extraFeePaid, gracePaidAt]);
+
+  const startMs = (() => {
+    if (booking.start_time) {
+      if (typeof booking.start_time === "string" && booking.start_time.includes("T"))
+        return new Date(booking.start_time).getTime();
+      const d = new Date(booking.created_at);
+      const [h,m] = (booking.start_time||"").split(":").map(Number);
+      if (!isNaN(h)) { d.setHours(h, m, 0, 0); return d.getTime(); }
+    }
+    return new Date(booking.created_at).getTime();
+  })();
+
+  const endMs = (() => {
+    if (booking.end_time) {
+      if (typeof booking.end_time === "string" && booking.end_time.includes("T"))
+        return new Date(booking.end_time).getTime();
+      const d = new Date(booking.created_at);
+      const [h,m] = (booking.end_time||"").split(":").map(Number);
+      if (!isNaN(h)) {
+        d.setHours(h, m, 0, 0);
+        if (d.getTime() <= startMs) d.setDate(d.getDate()+1);
+        return d.getTime();
+      }
+    }
+    return startMs + (booking.hours||1)*3600*1000;
+  })();
+
+  return { state, now, startMs, endMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt };
 }
 
-// ─── COUNTDOWN DISPLAY ────────────────────────────────────────────────────────
-function CountdownTimer({ booking }) {
+// ─── SMART COUNTDOWN TIMER ───────────────────────────────────────────────────
+function CountdownTimer({ booking, onExtraFeeTriggered }) {
   const C = useTheme();
-  const remaining = useCountdown(booking);
-  if (remaining === null) return null;
-  if (remaining <= 0) {
+  const { state, now, startMs, endMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt } = useParkingLifecycle(booking);
+  const [extraFeePrompt, setExtraFeePrompt] = useState(false);
+  const [leaveTime, setLeaveTime] = useState("");
+  const [extraFeeTriggeredOnce, setExtraFeeTriggeredOnce] = useState(false);
+
+  // Trigger extra fee prompt once when entering overdue-grace
+  useEffect(() => {
+    if (state === "overdue-grace" && !extraFeeTriggeredOnce && !extraFeePaid) {
+      setExtraFeeTriggeredOnce(true);
+      setExtraFeePrompt(true);
+      // Pre-fill leave time to 15 min from now
+      const d = new Date(Date.now() + 15*60*1000);
+      setLeaveTime(`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`);
+      if (onExtraFeeTriggered) onExtraFeeTriggered(booking);
+    }
+  }, [state, extraFeeTriggeredOnce, extraFeePaid]);
+
+  const handlePayExtraFee = () => {
+    // Calculate extra fee based on proposed leave time
+    const now = Date.now();
+    const leaveMs = leaveTime
+      ? (() => { const d = new Date(); const [h,m] = leaveTime.split(":").map(Number); d.setHours(h,m,0,0); if(d.getTime() < now) d.setDate(d.getDate()+1); return d.getTime(); })()
+      : endMs + 15*60*1000;
+    const overMins = Math.max(15, Math.ceil((leaveMs - endMs) / 60000));
+    const rate = (booking.price_per_hour || booking.total_amount / booking.hours) || 100;
+    const extraFee = Math.ceil((overMins / 60) * rate * 1.5); // 1.5x for overstay
+    setExtraFeePrompt(false);
+    setExtraFeePaid(true);
+    setGracePaidAt(Date.now());
+    if (onExtraFeeTriggered) onExtraFeeTriggered(booking, extraFee, overMins);
+  };
+
+  if (booking.status !== "confirmed" || booking.payment_status !== "paid") return null;
+
+  const pad = n => String(n).padStart(2,"0");
+  const fmtMs = ms => {
+    const s = Math.max(0, Math.floor(ms/1000));
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
+    return { h, m, sec, total: s };
+  };
+
+  // ── PENDING: show pre-start countdown ──
+  if (state === "pending" || state === "pre-warn") {
+    const diff = startMs - now;
+    const { h, m, sec } = fmtMs(diff);
+    const isPre = state === "pre-warn";
     return (
-      <div style={{background:`${C.danger}12`,border:`1px solid ${C.danger}30`,borderRadius:10,padding:"11px 13px",marginTop:8,textAlign:"center"}}>
-        <div style={{fontSize:13,fontWeight:700,color:C.danger,display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-          <Icon name="alert-triangle" size={15} color={C.danger}/>Parking Time Expired
+      <div style={{background:isPre?`${C.warn}12`:C.accentSoft,border:`1.5px solid ${isPre?C.warn:C.accent}30`,borderRadius:12,padding:"12px 14px",marginTop:8}}>
+        <div style={{fontSize:11,fontWeight:700,color:isPre?C.warn:C.accent,marginBottom:6,display:"flex",alignItems:"center",gap:6}}>
+          <Icon name="clock" size={14} color={isPre?C.warn:C.accent} strokeWidth={2.5}/>
+          {isPre ? "⚠ Parking starts in less than 5 minutes!" : "Parking starts in"}
         </div>
-        <div style={{fontSize:11,color:C.muted,marginTop:3}}>Please move your vehicle</div>
+        <div style={{display:"flex",gap:6,alignItems:"baseline"}}>
+          {h > 0 && <><span style={{fontSize:28,fontWeight:900,color:isPre?C.warn:C.accent}}>{h}</span><span style={{fontSize:11,color:C.muted}}>hr</span></>}
+          <span style={{fontSize:28,fontWeight:900,color:isPre?C.warn:C.accent}}>{pad(m)}</span>
+          <span style={{fontSize:11,color:C.muted}}>min</span>
+          <span style={{fontSize:28,fontWeight:900,color:isPre?C.warn:C.accent}}>{pad(sec)}</span>
+          <span style={{fontSize:11,color:C.muted}}>sec</span>
+        </div>
+        <div style={{fontSize:11,color:C.muted,marginTop:5}}>
+          Session starts at {new Date(startMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}
+        </div>
       </div>
     );
   }
-  const totalSecs = Math.floor(remaining / 1000);
-  const hrs = Math.floor(totalSecs / 3600);
-  const mins = Math.floor((totalSecs % 3600) / 60);
-  const secs = totalSecs % 60;
-  const totalDuration = (booking.hours || 1) * 3600;
-  const pct = Math.min(100, (totalSecs / totalDuration) * 100);
-  const isLow = pct < 20;
-  const timerColor = isLow ? C.danger : pct < 50 ? C.warn : C.accent;
-  const r = 28, circ = 2 * Math.PI * r;
-  const strokeDash = (pct / 100) * circ;
 
-  return (
-    <div style={{background:isLow?`${C.danger}08`:C.accentSoft,border:`1px solid ${timerColor}25`,borderRadius:12,padding:"11px 13px",marginTop:8}}>
-      <div style={{fontSize:10,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
-        <Icon name="clock" size={12} color={C.muted}/>Time Remaining
-      </div>
-      <div style={{display:"flex",alignItems:"center",gap:13}}>
-        <div style={{position:"relative",width:70,height:70,flexShrink:0}}>
-          <svg width="70" height="70" style={{transform:"rotate(-90deg)"}}>
-            <circle cx="35" cy="35" r={r} fill="none" stroke={C.border} strokeWidth="5"/>
-            <circle cx="35" cy="35" r={r} fill="none" stroke={timerColor} strokeWidth="5" strokeDasharray={`${strokeDash} ${circ}`} strokeLinecap="round" style={{transition:"stroke-dasharray 1s linear, stroke 0.5s"}}/>
-          </svg>
-          <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-            <div style={{fontSize:11,fontWeight:800,color:timerColor}}>{String(mins).padStart(2,"0")}:{String(secs).padStart(2,"0")}</div>
+  // ── ACTIVE / EXPIRING: main countdown ──
+  if (state === "active" || state === "expiring") {
+    const diff = endMs - now;
+    const { h, m, sec, total } = fmtMs(diff);
+    const totalDuration = (booking.hours||1)*3600;
+    const pct = Math.min(100,(total/totalDuration)*100);
+    const isExpiring = state === "expiring";
+    const timerColor = isExpiring ? C.danger : pct < 50 ? C.warn : C.accent;
+    const r = 28, circ = 2*Math.PI*r, dash = (pct/100)*circ;
+
+    return (
+      <div style={{background:isExpiring?`${C.danger}08`:C.accentSoft,border:`1.5px solid ${timerColor}30`,borderRadius:12,padding:"12px 14px",marginTop:8}}>
+        {isExpiring && (
+          <div style={{background:`${C.danger}15`,border:`1px solid ${C.danger}30`,borderRadius:8,padding:"8px 10px",marginBottom:10,display:"flex",alignItems:"center",gap:7}}>
+            <Icon name="alert-triangle" size={15} color={C.danger} strokeWidth={2.5}/>
+            <div>
+              <div style={{fontSize:12,fontWeight:800,color:C.danger}}>Less than 10 minutes remaining!</div>
+              <div style={{fontSize:10,color:C.muted}}>Extra fee applies after time expires</div>
+            </div>
+          </div>
+        )}
+        <div style={{fontSize:10,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
+          <Icon name="clock" size={12} color={C.muted}/>Time Remaining
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:13}}>
+          <div style={{position:"relative",width:70,height:70,flexShrink:0}}>
+            <svg width="70" height="70" style={{transform:"rotate(-90deg)"}}>
+              <circle cx="35" cy="35" r={r} fill="none" stroke={C.border} strokeWidth="5"/>
+              <circle cx="35" cy="35" r={r} fill="none" stroke={timerColor} strokeWidth="5"
+                strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+                style={{transition:"stroke-dasharray 1s linear,stroke 0.5s"}}/>
+            </svg>
+            <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <div style={{fontSize:11,fontWeight:800,color:timerColor}}>{pad(m)}:{pad(sec)}</div>
+            </div>
+          </div>
+          <div style={{flex:1}}>
+            <div style={{display:"flex",gap:5,alignItems:"baseline"}}>
+              {h>0&&<><span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{h}</span><span style={{fontSize:11,color:C.muted}}>hr</span></>}
+              <span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{pad(m)}</span>
+              <span style={{fontSize:11,color:C.muted}}>min</span>
+              <span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{pad(sec)}</span>
+              <span style={{fontSize:11,color:C.muted}}>sec</span>
+            </div>
+            <div style={{marginTop:6,width:"100%",height:4,background:C.border,borderRadius:4,overflow:"hidden"}}>
+              <div style={{width:`${pct}%`,height:"100%",background:`linear-gradient(90deg,${timerColor},${timerColor}88)`,borderRadius:4,transition:"width 1s linear"}}/>
+            </div>
           </div>
         </div>
-        <div style={{flex:1}}>
-          <div style={{display:"flex",gap:5,alignItems:"baseline"}}>
-            {hrs > 0 && <><span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{hrs}</span><span style={{fontSize:11,color:C.muted,fontWeight:600}}>hr</span></>}
-            <span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{String(mins).padStart(2,"0")}</span>
-            <span style={{fontSize:11,color:C.muted,fontWeight:600}}>min</span>
-            <span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{String(secs).padStart(2,"0")}</span>
-            <span style={{fontSize:11,color:C.muted,fontWeight:600}}>sec</span>
+      </div>
+    );
+  }
+
+  // ── OVERDUE: extra fee prompt (fires once) ──
+  if (state === "overdue-grace" || extraFeePrompt) {
+    const overMs = now - endMs;
+    const { h:oh, m:om, sec:os } = fmtMs(overMs);
+    const remainGrace = (endMs + 15*60*1000) - now;
+    const { m:gm, sec:gs } = fmtMs(Math.max(0, remainGrace));
+
+    return (
+      <div style={{background:`${C.danger}10`,border:`2px solid ${C.danger}`,borderRadius:14,padding:"14px",marginTop:8}}>
+        <div style={{fontSize:14,fontWeight:800,color:C.danger,marginBottom:4,display:"flex",alignItems:"center",gap:7}}>
+          <Icon name="alert-triangle" size={17} color={C.danger} strokeWidth={2.5}/>Time Expired!
+        </div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
+          Overstay: <span style={{color:C.danger,fontWeight:700}}>{oh>0?`${oh}h `:""}{ om}m {pad(os)}s</span>
+          {remainGrace > 0 && <span style={{marginLeft:8,color:C.warn}}>· {gm}:{pad(gs)} to settle before barrier locks</span>}
+        </div>
+        <div style={{background:C.inputBg,borderRadius:10,padding:"10px 12px",marginBottom:12,border:`1px solid ${C.warn}40`}}>
+          <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:6}}>When do you plan to leave?</div>
+          <input type="time" value={leaveTime} onChange={e=>setLeaveTime(e.target.value)}
+            style={{width:"100%",background:"transparent",border:`1.5px solid ${C.warn}`,borderRadius:8,padding:"9px",fontSize:15,fontWeight:800,color:C.warn,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}/>
+          <div style={{fontSize:10,color:C.muted,marginTop:6}}>
+            Extra fee: <span style={{color:C.danger,fontWeight:800}}>
+              KES {(() => {
+                if (!leaveTime) return "—";
+                const d2=new Date(); const [h2,m2]=leaveTime.split(":").map(Number); if(isNaN(h2)) return "—"; d2.setHours(h2,m2,0,0); if(d2.getTime()<Date.now()) d2.setDate(d2.getDate()+1);
+                const overMins = Math.max(15, Math.ceil((d2.getTime()-endMs)/60000));
+                const rate = (booking.price_per_hour||booking.total_amount/booking.hours)||100;
+                return Math.ceil((overMins/60)*rate*1.5).toLocaleString();
+              })()}
+            </span> (1.5× overstay rate)
           </div>
-          <div style={{marginTop:6,width:"100%",height:3,background:C.border,borderRadius:3,overflow:"hidden"}}>
-            <div style={{width:`${pct}%`,height:"100%",background:timerColor,borderRadius:3,transition:"width 1s linear"}}/>
-          </div>
-          {isLow && <div style={{fontSize:10,color:C.danger,fontWeight:700,marginTop:4}}>Less than 20% time remaining</div>}
+        </div>
+        <button onClick={handlePayExtraFee} style={{width:"100%",padding:"12px",background:`linear-gradient(135deg,${C.danger},#B02240)`,border:"none",borderRadius:11,color:"#fff",fontSize:14,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+          <Icon name="credit-card" size={16} color="#fff" strokeWidth={2.5}/>Pay via M-Pesa & Extend
+        </button>
+      </div>
+    );
+  }
+
+  // ── GRACE: 5-minute allowance after paying ──
+  if (state === "grace") {
+    const graceEnd = gracePaidAt + 5*60*1000;
+    const diff = graceEnd - now;
+    const { m, sec } = fmtMs(diff);
+    return (
+      <div style={{background:`${C.warn}12`,border:`2px solid ${C.warn}`,borderRadius:14,padding:"14px",marginTop:8}}>
+        <div style={{fontSize:14,fontWeight:800,color:C.warn,marginBottom:6,display:"flex",alignItems:"center",gap:7}}>
+          <Icon name="clock" size={17} color={C.warn} strokeWidth={2.5}/>5-Minute Exit Allowance
+        </div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Payment received. Please exit within:</div>
+        <div style={{display:"flex",gap:5,alignItems:"baseline",marginBottom:8}}>
+          <span style={{fontSize:38,fontWeight:900,color:C.warn,lineHeight:1}}>{pad(m)}</span>
+          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>min</span>
+          <span style={{fontSize:38,fontWeight:900,color:C.warn,lineHeight:1}}>{pad(sec)}</span>
+          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>sec</span>
+        </div>
+        <div style={{width:"100%",height:5,background:C.border,borderRadius:5,overflow:"hidden"}}>
+          <div style={{width:`${(Math.max(0,diff)/(5*60*1000))*100}%`,height:"100%",background:C.warn,borderRadius:5,transition:"width 1s linear"}}/>
+        </div>
+        <div style={{fontSize:11,color:C.warn,fontWeight:700,marginTop:8}}>Drive to the exit now — barrier will open automatically.</div>
+      </div>
+    );
+  }
+
+  // ── OVERSTAY: barrier holds, payment at exit ──
+  if (state === "overstay") {
+    const overstayMs = now - (gracePaidAt ? gracePaidAt + 5*60*1000 : endMs + 15*60*1000);
+    const { h:oh, m:om, sec:os } = fmtMs(overstayMs);
+    return (
+      <div style={{background:`${C.danger}12`,border:`2px solid ${C.danger}`,borderRadius:14,padding:"14px",marginTop:8,textAlign:"center"}}>
+        <div style={{fontSize:14,fontWeight:800,color:C.danger,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
+          <Icon name="x-circle" size={18} color={C.danger} strokeWidth={2.5}/>Barrier Active
+        </div>
+        <div style={{fontSize:12,color:C.muted,marginBottom:8}}>
+          Overstay: <span style={{color:C.danger,fontWeight:800}}>{oh>0?`${oh}h `:""}{om}m {pad(os)}s</span>
+        </div>
+        <div style={{background:C.inputBg,borderRadius:10,padding:"10px",marginBottom:4}}>
+          <div style={{fontSize:12,fontWeight:700,color:C.text}}>Drive to exit gate</div>
+          <div style={{fontSize:11,color:C.muted,marginTop:3}}>Scanner will detect your plate and calculate final fee</div>
+        </div>
+        <div style={{fontSize:10,color:C.muted,marginTop:8}}>
+          Continuing to accrue at standard rate until exit detected
         </div>
       </div>
-    </div>
-  );
+    );
+  }
+
+  return null;
 }
 
 // ─── BOOKINGS SCREEN ──────────────────────────────────────────────────────────
@@ -1037,7 +1296,7 @@ function BookingsScreen({ user }) {
                   </div>
                   <CountdownTimer booking={b}/>
                   <button onClick={()=>cancel(b.id)} style={{marginTop:11,width:"100%",padding:"9px",background:"transparent",border:`1.5px solid ${C.danger}`,borderRadius:9,color:C.danger,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                    <Icon name="trash-2" size={14} color={C.danger}/>Finish
+                    <Icon name="trash-2" size={14} color={C.danger}/>Cancel Booking
                   </button>
                 </Card>
               ))}
@@ -1051,7 +1310,7 @@ function BookingsScreen({ user }) {
                 <Card key={b.id} style={{marginBottom:8,opacity:0.75}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                     <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
-                    <Badge color={b.status==="finished"?C.danger:C.muted}>{b.status==="finished"?"Finished":"Done"}</Badge>
+                    <Badge color={b.status==="cancelled"?C.danger:C.muted}>{b.status==="cancelled"?"Cancelled":"Done"}</Badge>
                   </div>
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>{b.spot_name}</div>
                   <div style={{fontSize:12,color:C.muted,marginBottom:4}}>{b.spot_address}</div>
@@ -1069,6 +1328,86 @@ function BookingsScreen({ user }) {
             </>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// ─── INPUT VALIDATION ────────────────────────────────────────────────────────
+const validate = {
+  fullName: v => /^[A-Za-z\s]{2,60}$/.test(v.trim()) ? "" : "Enter a valid full name (letters only)",
+  email: v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) ? "" : "Enter a valid email address",
+  phone: v => /^(\+254|0)[17]\d{8}$/.test(v.replace(/\s/g,"")) ? "" : "Enter valid Kenyan number e.g. +254712345678",
+  password: v => v.length >= 6 ? "" : "Password must be at least 6 characters",
+  plate: v => /^[A-Z]{2,3}\s?\d{3,4}[A-Z]$/.test(v.replace(/\s/g,"").toUpperCase()) ? "" : "Enter valid plate e.g. KBX 123D",
+  kraPin: v => !v || /^[AP]\d{9}[A-Z]$/.test(v.toUpperCase()) ? "" : "Enter valid KRA PIN e.g. A000000000Z",
+  idNumber: v => /^\d{7,8}$/.test(v.trim()) ? "" : "Enter valid 7-8 digit ID number",
+  mpesaPhone: v => /^(\+254|0)[17]\d{8}$/.test(v.replace(/\s/g,"")) ? "" : "Enter valid M-Pesa number",
+  businessName: v => v.trim().length >= 2 ? "" : "Business name required",
+  price: v => !isNaN(v) && Number(v) > 0 ? "" : "Enter a valid price",
+  spaces: v => !isNaN(v) && Number(v) > 0 && Number(v) <= 500 ? "" : "Enter 1–500 spaces",
+  lat: v => !isNaN(v) && Math.abs(Number(v)) <= 90 ? "" : "Enter valid latitude",
+  lng: v => !isNaN(v) && Math.abs(Number(v)) <= 180 ? "" : "Enter valid longitude",
+};
+
+const ValidatedInput = ({ label, name, value, onChange, placeholder, type="text", style:s }) => {
+  const C = useTheme();
+  const [touched, setTouched] = useState(false);
+  const err = touched && validate[name] ? validate[name](value) : "";
+  return (
+    <div style={{marginBottom:14}}>
+      {label && <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:6}}>{label}</div>}
+      <input
+        type={type} value={value} placeholder={placeholder}
+        onChange={e => { onChange(e); if (!touched) setTouched(true); }}
+        onBlur={() => setTouched(true)}
+        style={{width:"100%",background:err?`${C.danger}08`:C.inputBg,border:`1.5px solid ${err?C.danger:touched&&!err&&value?C.accent:C.border}`,borderRadius:10,padding:"12px 14px",fontSize:15,color:C.text,outline:"none",fontFamily:"inherit",boxSizing:"border-box",...(s||{})}}
+      />
+      {err && <div style={{fontSize:11,color:C.danger,marginTop:4,display:"flex",alignItems:"center",gap:4}}><Icon name="alert-triangle" size={11} color={C.danger} strokeWidth={2.5}/>{err}</div>}
+    </div>
+  );
+};
+
+// ─── MAP TOGGLE (collapsible) ─────────────────────────────────────────────────
+function MapToggle({ spots, selected, onSelect, userLocation, directions, onDirections, loading, directionsSpot, directionsLoading, onCloseDirections }) {
+  const C = useTheme();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div style={{marginBottom:11}}>
+      <button onClick={()=>setOpen(o=>!o)} style={{width:"100%",padding:"10px 14px",background:C.card,border:`1.5px solid ${open?C.accent:C.border}`,borderRadius:open?"14px 14px 0 0":14,display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer",transition:"all 0.2s"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{width:32,height:32,borderRadius:9,background:open?C.accentSoft:C.inputBg,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <Icon name="map" size={16} color={open?C.accent:C.muted} strokeWidth={2.5}/>
+          </div>
+          <div style={{textAlign:"left"}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.text}}>Map View</div>
+            <div style={{fontSize:10,color:C.muted}}>{open?"Tap to collapse":"Tap to explore map"}</div>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          {selected && !open && (
+            <span style={{fontSize:10,fontWeight:700,color:C.accent,background:C.accentSoft,padding:"2px 8px",borderRadius:20}}>{selected.name?.split(" ")[0]}</span>
+          )}
+          <Icon name={open?"x":"map-pin"} size={16} color={open?C.muted:C.accent} strokeWidth={2.5}/>
+        </div>
+      </button>
+
+      {open && (
+        <div style={{border:`1.5px solid ${C.accent}`,borderTop:"none",borderRadius:"0 0 14px 14px",overflow:"hidden"}}>
+          {loading ? (
+            <div style={{height:220,background:C.card,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <div className="spin" style={{width:28,height:28,borderRadius:"50%",border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`}}/>
+            </div>
+          ) : (
+            <MapView spots={spots} selected={selected} onSelect={s=>{onSelect(s); setOpen(false);}} userLocation={userLocation} directions={directions} onDirections={onDirections}/>
+          )}
+          {directionsSpot && (
+            <div style={{padding:"0 8px 8px"}}>
+              <DirectionsPanel spot={directionsSpot} userLocation={userLocation} directions={directions} loading={directionsLoading} onClose={onCloseDirections}/>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1234,16 +1573,8 @@ function DriverHome({ user, spots, loading, connected }) {
           )}
         </div>
 
-        {/* Map */}
-        {loading ? (
-          <div style={{height:220,background:C.card,borderRadius:18,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${C.border}`,marginBottom:10}}>
-            <div className="spin" style={{width:32,height:32,borderRadius:"50%",border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`}}/>
-          </div>
-        ) : (
-          <MapView spots={spots} selected={selected} onSelect={handleMapSelect} userLocation={userLocation} directions={directions} onDirections={openDirections}/>
-        )}
-
-        {directionsSpot && <DirectionsPanel spot={directionsSpot} userLocation={userLocation} directions={directions} loading={directionsLoading} onClose={closeDirections}/>}
+        {/* Map — collapsible so it doesn't block the list */}
+        <MapToggle spots={spots} selected={selected} onSelect={handleMapSelect} userLocation={userLocation} directions={directions} onDirections={openDirections} loading={loading} directionsSpot={directionsSpot} directionsLoading={directionsLoading} onCloseDirections={closeDirections}/>
 
         {/* Stats */}
         <div style={{display:"flex",gap:6,marginBottom:11}}>
@@ -1361,14 +1692,40 @@ function ProviderPortal({ user, onLogout }) {
             {(dash?.carsCurrentlyParked||[]).length===0 ? (
               <Card style={{textAlign:"center",color:C.muted,fontSize:13,padding:"20px 0",marginBottom:16}}>No cars currently parked</Card>
             ) : (dash?.carsCurrentlyParked||[]).map((b,i) => (
-              <Card key={i} style={{marginBottom:7,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <div>
-                  <div style={{fontSize:15,fontWeight:700,color:C.text,fontFamily:"monospace"}}>{b.vehicle_plate}</div>
-                  <div style={{fontSize:11,color:C.muted}}>{b.spot_name}</div>
+              <Card key={i} style={{marginBottom:9,border:`1px solid ${C.accent}20`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{width:40,height:40,borderRadius:12,background:`${C.accent}20`,border:`1.5px solid ${C.accent}40`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                      <Icon name="car" size={18} color={C.accent} strokeWidth={2.5}/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:15,fontWeight:800,color:C.text,fontFamily:"monospace",letterSpacing:1}}>{b.vehicle_plate}</div>
+                      {b.spot_number && <div style={{fontSize:10,color:C.muted,marginTop:1}}>Spot #{b.spot_number}</div>}
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:13,color:C.accent,fontWeight:700}}>{b.hours}hr</div>
+                    <div style={{fontSize:10,color:C.muted}}>Exp {new Date(b.expires_at||Date.now()).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}</div>
+                  </div>
                 </div>
-                <div style={{textAlign:"right"}}>
-                  <div style={{fontSize:12,color:C.accent,fontWeight:700}}>{b.hours}hr</div>
-                  <div style={{fontSize:10,color:C.muted}}>Exp {new Date(b.expires_at).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}</div>
+                {/* Driver info */}
+                <div style={{background:C.inputBg,borderRadius:9,padding:"8px 10px",display:"flex",gap:12,flexWrap:"wrap"}}>
+                  {b.driver_name && (
+                    <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted}}>
+                      <Icon name="user" size={13} color={C.muted} strokeWidth={2.5}/>
+                      <span style={{color:C.text,fontWeight:600}}>{b.driver_name}</span>
+                    </div>
+                  )}
+                  {b.driver_phone && (
+                    <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted}}>
+                      <Icon name="phone" size={13} color={C.muted} strokeWidth={2.5}/>
+                      <span style={{color:C.text,fontWeight:600}}>{b.driver_phone}</span>
+                    </div>
+                  )}
+                  <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:C.muted}}>
+                    <Icon name="map-pin" size={13} color={C.muted} strokeWidth={2.5}/>
+                    <span>{b.spot_name}</span>
+                  </div>
                 </div>
               </Card>
             ))}
@@ -1417,22 +1774,22 @@ function ProviderPortal({ user, onLogout }) {
         ) : tab==="add" ? (
           <>
             <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:14}}>Add New Parking Location</div>
-            <Input label="Location Name" placeholder="Westlands Square Parking" value={sform.name} onChange={e=>sf("name",e.target.value)}/>
+            <ValidatedInput label="Location Name" name="businessName" placeholder="Westlands Square Parking" value={sform.name} onChange={e=>sf("name",e.target.value)}/>
             <Input label="Area / Neighbourhood" placeholder="Westlands" value={sform.area} onChange={e=>sf("area",e.target.value)}/>
             <Input label="Full Address" placeholder="Westlands Rd, Nairobi" value={sform.address} onChange={e=>sf("address",e.target.value)}/>
             <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><Input label="Latitude" placeholder="-1.2676" type="number" value={sform.lat} onChange={e=>sf("lat",e.target.value)}/></div>
-              <div style={{flex:1}}><Input label="Longitude" placeholder="36.8116" type="number" value={sform.lng} onChange={e=>sf("lng",e.target.value)}/></div>
+              <div style={{flex:1}}><ValidatedInput label="Latitude" name="lat" placeholder="-1.2676" type="number" value={sform.lat} onChange={e=>sf("lat",e.target.value)}/></div>
+              <div style={{flex:1}}><ValidatedInput label="Longitude" name="lng" placeholder="36.8116" type="number" value={sform.lng} onChange={e=>sf("lng",e.target.value)}/></div>
             </div>
             <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><Input label="Total Spaces" placeholder="50" type="number" value={sform.totalSpaces} onChange={e=>sf("totalSpaces",e.target.value)}/></div>
-              <div style={{flex:1}}><Input label="Price/Hour (KES)" placeholder="150" type="number" value={sform.pricePerHour} onChange={e=>sf("pricePerHour",e.target.value)}/></div>
+              <div style={{flex:1}}><ValidatedInput label="Total Spaces" name="spaces" placeholder="50" type="number" value={sform.totalSpaces} onChange={e=>sf("totalSpaces",e.target.value)}/></div>
+              <div style={{flex:1}}><ValidatedInput label="Price/Hour (KES)" name="price" placeholder="150" type="number" value={sform.pricePerHour} onChange={e=>sf("pricePerHour",e.target.value)}/></div>
             </div>
             <Select label="Type" value={sform.type} onChange={e=>sf("type",e.target.value)}>
               {["Mall","Office","Street","Residential","Other"].map(t=><option key={t} value={t}>{t}</option>)}
             </Select>
             <Input label="Amenities (comma separated)" placeholder="CCTV, Covered, EV Charging" value={sform.amenities} onChange={e=>sf("amenities",e.target.value)}/>
-            <Input label="Contact Phone" placeholder="+254 20 123 4567" value={sform.phone} onChange={e=>sf("phone",e.target.value)}/>
+            <ValidatedInput label="Contact Phone" name="mpesaPhone" placeholder="+254 20 123 4567" value={sform.phone} onChange={e=>sf("phone",e.target.value)}/>
             {msg && <div style={{color:isOk?C.accent:C.danger,fontSize:13,marginBottom:12,padding:"10px 13px",background:isOk?C.accentSoft:`${C.danger}12`,borderRadius:9,display:"flex",alignItems:"center",gap:7}}>
               <Icon name={isOk?"check-circle":"alert-triangle"} size={14} color={isOk?C.accent:C.danger}/>{msgText}
             </div>}
@@ -1444,11 +1801,11 @@ function ProviderPortal({ user, onLogout }) {
         ) : (
           <>
             <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:14}}>Payment & Business Details</div>
-            <Input label="Business Name" placeholder="Mwangi Parking Ltd" value={pform.businessName} onChange={e=>pf("businessName",e.target.value)}/>
-            <Input label="M-Pesa Phone" placeholder="+254 712 345 678" type="tel" value={pform.mpesaPhone} onChange={e=>pf("mpesaPhone",e.target.value)}/>
+            <ValidatedInput label="Business Name" name="businessName" placeholder="Mwangi Parking Ltd" value={pform.businessName} onChange={e=>pf("businessName",e.target.value)}/>
+            <ValidatedInput label="M-Pesa Phone" name="mpesaPhone" placeholder="+254 712 345 678" type="tel" value={pform.mpesaPhone} onChange={e=>pf("mpesaPhone",e.target.value)}/>
             <Input label="M-Pesa Account / Till No." placeholder="174379" value={pform.mpesaAccount} onChange={e=>pf("mpesaAccount",e.target.value)}/>
-            <Input label="National ID Number" placeholder="12345678" value={pform.idNumber} onChange={e=>pf("idNumber",e.target.value)}/>
-            <Input label="KRA PIN (optional)" placeholder="A000000000Z" value={pform.kraPin} onChange={e=>pf("kraPin",e.target.value)}/>
+            <ValidatedInput label="National ID Number" name="idNumber" placeholder="12345678" value={pform.idNumber} onChange={e=>pf("idNumber",e.target.value)}/>
+            <ValidatedInput label="KRA PIN (optional)" name="kraPin" placeholder="A000000000Z" value={pform.kraPin} onChange={e=>pf("kraPin",e.target.value)}/>
             {msg && <div style={{color:isOk?C.accent:C.danger,fontSize:13,marginBottom:12,padding:"10px 13px",background:isOk?C.accentSoft:`${C.danger}12`,borderRadius:9,display:"flex",alignItems:"center",gap:7}}>
               <Icon name={isOk?"check-circle":"alert-triangle"} size={14} color={isOk?C.accent:C.danger}/>{msgText}
             </div>}
