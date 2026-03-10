@@ -48,7 +48,12 @@ export const providerApi = {
   getSpots: () => api.get("/api/provider/spots").then(r => r.data),
   getDashboard: () => api.get("/api/provider/dashboard").then(r => r.data),
 };
-export const adminApi = {
+export const walletApi = {
+  get: () => api.get("/api/wallet").then(r => r.data),
+  topUp: (d) => api.post("/api/wallet/topup", d).then(r => r.data),
+  deduct: (d) => api.post("/api/wallet/deduct", d).then(r => r.data),
+  refund: (d) => api.post("/api/wallet/refund", d).then(r => r.data),
+};
   getDashboard: () => api.get("/api/admin/dashboard").then(r => r.data),
   approveSpot: (id, approved) => api.put(`/api/admin/spots/${id}/approve`, { approved }).then(r => r.data),
 };
