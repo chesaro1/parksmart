@@ -1037,7 +1037,7 @@ function BookingsScreen({ user }) {
                   </div>
                   <CountdownTimer booking={b}/>
                   <button onClick={()=>cancel(b.id)} style={{marginTop:11,width:"100%",padding:"9px",background:"transparent",border:`1.5px solid ${C.danger}`,borderRadius:9,color:C.danger,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                    <Icon name="trash-2" size={14} color={C.danger}/>Cancel Booking
+                    <Icon name="trash-2" size={14} color={C.danger}/>Finish
                   </button>
                 </Card>
               ))}
@@ -1051,7 +1051,7 @@ function BookingsScreen({ user }) {
                 <Card key={b.id} style={{marginBottom:8,opacity:0.75}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                     <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
-                    <Badge color={b.status==="cancelled"?C.danger:C.muted}>{b.status==="cancelled"?"Cancelled":"Done"}</Badge>
+                    <Badge color={b.status==="finished"?C.danger:C.muted}>{b.status==="finished"?"Finished":"Done"}</Badge>
                   </div>
                   <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>{b.spot_name}</div>
                   <div style={{fontSize:12,color:C.muted,marginBottom:4}}>{b.spot_address}</div>
