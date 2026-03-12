@@ -173,7 +173,7 @@ app.get("/api/spots/:id", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.post("/api/bookings", requireAuth, async (req, res) => {
-  const { spotId, hours, arriveAt, vehiclePlate } = req.body;
+  const { spotId, hours, arriveAt, startTime, endTime, vehiclePlate } = req.body;
   if (!spotId || !hours || !vehiclePlate)
     return res.status(400).json({ error: "spotId, hours, vehiclePlate required" });
 
@@ -184,7 +184,32 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
   const total = spot.price_per_hour * parseInt(hours);
   const commission = Math.round(total * 0.20); // 20% commission
   const providerAmount = total - commission;    // 80% to provider
-  const expiresAt = new Date(Date.now() + parseInt(hours) * 3600000).toISOString();
+
+  // Resolve arrive_at from startTime (HH:MM) or arriveAt (ISO) or now
+  const resolveTime = (hhMM) => {
+    if (!hhMM) return null;
+    const [h, m] = hhMM.split(":").map(Number);
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    // If the time has already passed today, push to tomorrow
+    if (d.getTime() < Date.now() - 60000) d.setDate(d.getDate() + 1);
+    return d.toISOString();
+  };
+
+  const arriveAtISO = arriveAt || resolveTime(startTime) || new Date().toISOString();
+  const arriveMs = new Date(arriveAtISO).getTime();
+
+  // expires_at = arrive_at + hours (not Date.now() + hours)
+  const expiresAt = endTime
+    ? (() => {
+        const iso = resolveTime(endTime);
+        // if endTime resolves to before arriveAt, it must be next day
+        if (iso && new Date(iso).getTime() <= arriveMs)
+          return new Date(new Date(iso).getTime() + 24*3600000).toISOString();
+        return iso || new Date(arriveMs + parseInt(hours) * 3600000).toISOString();
+      })()
+    : new Date(arriveMs + parseInt(hours) * 3600000).toISOString();
+
   const bookingId = "PS-" + Math.floor(100000 + Math.random() * 900000);
 
   const { data: booking, error } = await supabase.from("bookings").insert({
@@ -194,7 +219,7 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
     provider_id: spot.provider_id,
     vehicle_plate: vehiclePlate.toUpperCase(),
     hours: parseInt(hours),
-    arrive_at: arriveAt || new Date().toISOString(),
+    arrive_at: arriveAtISO,
     expires_at: expiresAt,
     total_amount: total,
     commission_amount: commission,
