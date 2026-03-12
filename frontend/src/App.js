@@ -1178,297 +1178,164 @@ function resolveBookingTimes(booking) {
 
 function useParkingLifecycle(booking) {
   const [now, setNow] = useState(() => Date.now());
-  const [extraFeePaid, setExtraFeePaid] = useState(false);
-  const [gracePaidAt, setGracePaidAt] = useState(null);
-
-  // Always tick — we need the countdown to update in real time
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-
   const { startMs, endMs } = resolveBookingTimes(booking);
-
-  const totalDurationMs = endMs - startMs;
-  // Never let expiringMs go before startMs (e.g. for short 30-min bookings)
-  const expiringMs  = Math.max(startMs, endMs - 10 * 60 * 1000);
-  const preWarnMs   = startMs - 5 * 60 * 1000;
-  const overdueEndMs = endMs + 15 * 60 * 1000;
-  const graceEndMs  = gracePaidAt ? gracePaidAt + 5 * 60 * 1000 : null;
-
-  // Determine state purely from now vs timestamps
-  let state;
-  if      (now < preWarnMs)                                  state = "pending";
-  else if (now < startMs)                                    state = "pre-warn";
-  else if (now < expiringMs)                                 state = "active";
-  else if (now < endMs)                                      state = "expiring";
-  else if (!extraFeePaid && now < overdueEndMs)              state = "overdue-grace";
-  else if (extraFeePaid && graceEndMs && now < graceEndMs)   state = "grace";
-  else                                                        state = "overstay";
-
-  return { state, now, startMs, endMs, totalDurationMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt };
+  // PHASE 1: now < startMs  → counting DOWN to start time
+  // PHASE 2: now >= startMs → counting DOWN to end time
+  const phase = now < startMs ? "waiting" : now < endMs ? "parking" : "ended";
+  return { phase, now, startMs, endMs };
 }
 
-// ─── SMART COUNTDOWN TIMER ───────────────────────────────────────────────────
-function CountdownTimer({ booking, onExtraFeeTriggered }) {
+// ─── COUNTDOWN TIMER (two-phase) ─────────────────────────────────────────────
+function CountdownTimer({ booking }) {
   const C = useTheme();
-  const { state, now, startMs, endMs, totalDurationMs, extraFeePaid, setExtraFeePaid, gracePaidAt, setGracePaidAt } = useParkingLifecycle(booking);
-  const [extraFeePrompt, setExtraFeePrompt] = useState(false);
-  const [leaveTime, setLeaveTime] = useState("");
-  const [extraFeeTriggeredOnce, setExtraFeeTriggeredOnce] = useState(false);
-
-  // Trigger extra fee prompt exactly once on entry to overdue-grace
-  useEffect(() => {
-    if (state === "overdue-grace" && !extraFeeTriggeredOnce) {
-      setExtraFeeTriggeredOnce(true);
-      setExtraFeePrompt(true);
-      const d = new Date(Date.now() + 15 * 60 * 1000);
-      setLeaveTime(`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`);
-      if (onExtraFeeTriggered) onExtraFeeTriggered(booking);
-    }
-  }, [state]);
-
-  const handlePayExtraFee = () => {
-    const nowMs = Date.now();
-    const leaveMs = leaveTime
-      ? (() => { const d = new Date(); const [h,m] = leaveTime.split(":").map(Number); d.setHours(h,m,0,0); if (d.getTime() < nowMs) d.setDate(d.getDate()+1); return d.getTime(); })()
-      : endMs + 15*60*1000;
-    const overMins = Math.max(15, Math.ceil((leaveMs - endMs) / 60000));
-    const rate = (booking.price_per_hour || (booking.total_amount / (booking.hours || 1))) || 100;
-    const extraFee = Math.ceil((overMins / 60) * rate * 1.5);
-    setExtraFeePrompt(false);
-    setExtraFeePaid(true);
-    setGracePaidAt(Date.now());
-    if (onExtraFeeTriggered) onExtraFeeTriggered(booking, extraFee, overMins);
-  };
-
-  // Don't render anything for non-confirmed bookings
+  const { phase, now, startMs, endMs } = useParkingLifecycle(booking);
   if (booking.status !== "confirmed") return null;
 
-  const pad = n => String(Math.max(0,n)).padStart(2,"0");
-  const fmtMs = ms => {
+  const pad = n => String(Math.max(0, Math.floor(n))).padStart(2, "0");
+  const fmtDiff = (ms) => {
     const s = Math.max(0, Math.floor(ms / 1000));
-    return { h: Math.floor(s/3600), m: Math.floor((s%3600)/60), sec: s%60, total: s };
+    return { h: Math.floor(s / 3600), m: Math.floor((s % 3600) / 60), s: s % 60, total: s };
   };
 
-  // ── PENDING / PRE-WARN: countdown TO start time ──
-  if (state === "pending" || state === "pre-warn") {
-    const diff = Math.max(0, startMs - now);
-    const { h, m, sec } = fmtMs(diff);
-    const isPre = state === "pre-warn";
-    const color = isPre ? C.warn : C.blue;
-
-    // Total time from booking-created to start, for the progress bar
+  // ── PHASE 1: Waiting for start time ──────────────────────────────────────
+  if (phase === "waiting") {
+    const diff = startMs - now;
+    const { h, m, s } = fmtDiff(diff);
     const bookingCreatedMs = new Date(booking.created_at).getTime();
     const totalWait = Math.max(1, startMs - bookingCreatedMs);
-    const elapsed = Math.max(0, now - bookingCreatedMs);
-    const pct = Math.min(100, (elapsed / totalWait) * 100);
+    const progressPct = Math.min(100, ((now - bookingCreatedMs) / totalWait) * 100);
+    const isAlmostTime = diff < 5 * 60 * 1000; // < 5 min
 
     return (
-      <div style={{background:isPre?`${C.warn}12`:`${C.blue}10`,border:`1.5px solid ${color}40`,borderRadius:14,padding:"14px",marginTop:8}}>
+      <div style={{
+        background: isAlmostTime ? `${C.warn}12` : `${C.blue}10`,
+        border: `1.5px solid ${isAlmostTime ? C.warn : C.blue}40`,
+        borderRadius: 14, padding: "14px", marginTop: 8,
+      }}>
         {/* Header */}
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-          <div style={{display:"flex",alignItems:"center",gap:7}}>
-            <div style={{width:34,height:34,borderRadius:10,background:`${color}15`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-              <Icon name={isPre?"alert-triangle":"clock"} size={17} color={color} strokeWidth={2.5}/>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom: 10 }}>
+          <div style={{ display:"flex", alignItems:"center", gap: 8 }}>
+            <div style={{ width:34, height:34, borderRadius:10, background:`${isAlmostTime ? C.warn : C.blue}15`, display:"flex", alignItems:"center", justifyContent:"center" }}>
+              <Icon name="clock" size={17} color={isAlmostTime ? C.warn : C.blue} strokeWidth={2.5}/>
             </div>
             <div>
-              <div style={{fontSize:12,fontWeight:800,color:color}}>
-                {isPre ? "Starting very soon!" : "Parking not started yet"}
+              <div style={{ fontSize:12, fontWeight:800, color: isAlmostTime ? C.warn : C.blue }}>
+                {isAlmostTime ? "Starting very soon!" : "Waiting for your slot"}
               </div>
-              <div style={{fontSize:10,color:C.muted}}>
-                Starts at {new Date(startMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}
+              <div style={{ fontSize:10, color:C.muted }}>
+                Starts {new Date(startMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}
+                {" → "}
+                Ends {new Date(endMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}
               </div>
             </div>
           </div>
-          <div style={{background:`${color}15`,borderRadius:20,padding:"3px 10px",fontSize:10,fontWeight:700,color:color}}>
+          <div style={{ background:`${isAlmostTime ? C.warn : C.blue}15`, borderRadius:20, padding:"3px 10px", fontSize:9, fontWeight:800, color: isAlmostTime ? C.warn : C.blue, letterSpacing:0.5 }}>
             UPCOMING
           </div>
         </div>
 
-        {/* Big countdown numbers */}
-        <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:10,justifyContent:"center"}}>
-          {h > 0 && (
-            <>
-              <span style={{fontSize:42,fontWeight:900,color:color,lineHeight:1}}>{h}</span>
-              <span style={{fontSize:13,color:C.muted,fontWeight:600,marginRight:6}}>hr</span>
-            </>
-          )}
-          <span style={{fontSize:42,fontWeight:900,color:color,lineHeight:1}}>{pad(m)}</span>
-          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>min</span>
-          <span style={{fontSize:42,fontWeight:900,color:color,lineHeight:1}}>{pad(sec)}</span>
-          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>sec</span>
-        </div>
-
-        {/* Progress bar — fills as start time approaches */}
-        <div style={{marginBottom:8}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted,marginBottom:4}}>
-            <span>Booked</span>
-            <span>Start time</span>
-          </div>
-          <div style={{width:"100%",height:6,background:C.border,borderRadius:6,overflow:"hidden"}}>
-            <div style={{
-              width:`${pct}%`, height:"100%",
-              background:`linear-gradient(90deg,${color},${color}88)`,
-              borderRadius:6, transition:"width 1s linear"
-            }}/>
+        {/* Countdown to start */}
+        <div style={{ textAlign:"center", marginBottom:10 }}>
+          <div style={{ fontSize:11, color:C.muted, marginBottom:4 }}>Parking begins in</div>
+          <div style={{ display:"flex", alignItems:"baseline", justifyContent:"center", gap:4 }}>
+            {h > 0 && <>
+              <span style={{ fontSize:44, fontWeight:900, color: isAlmostTime ? C.warn : C.blue, lineHeight:1 }}>{h}</span>
+              <span style={{ fontSize:13, color:C.muted, fontWeight:600, marginRight:6 }}>hr</span>
+            </>}
+            <span style={{ fontSize:44, fontWeight:900, color: isAlmostTime ? C.warn : C.blue, lineHeight:1 }}>{pad(m)}</span>
+            <span style={{ fontSize:13, color:C.muted, fontWeight:600 }}>min</span>
+            <span style={{ fontSize:44, fontWeight:900, color: isAlmostTime ? C.warn : C.blue, lineHeight:1 }}>{pad(s)}</span>
+            <span style={{ fontSize:13, color:C.muted, fontWeight:600 }}>sec</span>
           </div>
         </div>
 
-        {isPre && (
-          <div style={{background:`${C.warn}15`,borderRadius:9,padding:"8px 10px",fontSize:11,color:C.warn,fontWeight:700,textAlign:"center"}}>
-            ⚠ Head to the parking spot now — your session begins in under 5 minutes!
+        {/* Progress bar: booking time → start time */}
+        <div style={{ marginBottom:6 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:C.muted, marginBottom:3 }}>
+            <span>Booked</span><span>Start time</span>
           </div>
-        )}
-        {!isPre && (
-          <div style={{fontSize:11,color:C.muted,textAlign:"center"}}>
-            Your spot is reserved · Countdown begins at start time
+          <div style={{ height:6, background:C.border, borderRadius:6, overflow:"hidden" }}>
+            <div style={{ width:`${progressPct}%`, height:"100%", background: isAlmostTime ? C.warn : C.blue, borderRadius:6, transition:"width 1s linear" }}/>
+          </div>
+        </div>
+
+        {isAlmostTime && (
+          <div style={{ marginTop:8, background:`${C.warn}15`, borderRadius:9, padding:"8px 10px", fontSize:11, color:C.warn, fontWeight:700, textAlign:"center" }}>
+            ⚠ Head to the spot now — parking starts in under 5 minutes!
           </div>
         )}
       </div>
     );
   }
 
-  // ── ACTIVE / EXPIRING: main countdown ──
-  if (state === "active" || state === "expiring") {
-    const diff = endMs - now;
-    const { h, m, sec } = fmtMs(diff);
-    const pct = Math.min(100, Math.max(0, (diff / totalDurationMs) * 100));
-    const isExpiring = state === "expiring";
-    const timerColor = isExpiring ? C.danger : pct < 30 ? C.warn : C.accent;
-    const r = 28, circ = 2*Math.PI*r, dash = (pct/100)*circ;
+  // ── PHASE 2: Parking in progress ─────────────────────────────────────────
+  if (phase === "parking") {
+    const remaining = endMs - now;
+    const total = endMs - startMs;
+    const { h, m, s } = fmtDiff(remaining);
+    const pct = Math.min(100, Math.max(0, (remaining / total) * 100));
+    const isExpiring = remaining < 10 * 60 * 1000;
+    const color = isExpiring ? C.danger : pct < 30 ? C.warn : C.accent;
+    const r = 28, circ = 2 * Math.PI * r, dash = (pct / 100) * circ;
 
     return (
-      <div style={{background:isExpiring?`${C.danger}08`:C.accentSoft,border:`1.5px solid ${timerColor}30`,borderRadius:12,padding:"12px 14px",marginTop:8}}>
+      <div style={{
+        background: isExpiring ? `${C.danger}08` : C.accentSoft,
+        border: `1.5px solid ${color}30`,
+        borderRadius:14, padding:"14px", marginTop:8,
+      }}>
         {isExpiring && (
-          <div style={{background:`${C.danger}15`,border:`1px solid ${C.danger}30`,borderRadius:8,padding:"8px 10px",marginBottom:10,display:"flex",alignItems:"center",gap:7}}>
+          <div style={{ background:`${C.danger}15`, border:`1px solid ${C.danger}30`, borderRadius:9, padding:"8px 10px", marginBottom:10, display:"flex", alignItems:"center", gap:7 }}>
             <Icon name="alert-triangle" size={15} color={C.danger} strokeWidth={2.5}/>
             <div>
-              <div style={{fontSize:12,fontWeight:800,color:C.danger}}>Less than 10 minutes remaining!</div>
-              <div style={{fontSize:10,color:C.muted}}>Extra fee applies after time expires</div>
+              <div style={{ fontSize:12, fontWeight:800, color:C.danger }}>Less than 10 minutes left!</div>
+              <div style={{ fontSize:10, color:C.muted }}>Start heading to the exit</div>
             </div>
           </div>
         )}
-        <div style={{fontSize:10,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:0.5,marginBottom:8,display:"flex",alignItems:"center",gap:5}}>
-          <Icon name="clock" size={12} color={C.muted}/>Time Remaining
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:13}}>
-          <div style={{position:"relative",width:70,height:70,flexShrink:0}}>
-            <svg width="70" height="70" style={{transform:"rotate(-90deg)"}}>
-              <circle cx="35" cy="35" r={r} fill="none" stroke={C.border} strokeWidth="5"/>
-              <circle cx="35" cy="35" r={r} fill="none" stroke={timerColor} strokeWidth="5"
-                strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
-                style={{transition:"stroke-dasharray 1s linear,stroke 0.5s"}}/>
-            </svg>
-            <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
-              <div style={{fontSize:11,fontWeight:800,color:timerColor}}>{pad(m)}:{pad(sec)}</div>
+        <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+          {/* SVG ring */}
+          <svg width={70} height={70}>
+            <circle cx={35} cy={35} r={r} stroke={C.border} strokeWidth={4} fill="none"/>
+            <circle cx={35} cy={35} r={r} stroke={color} strokeWidth={4} fill="none"
+              strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+              transform="rotate(-90 35 35)" style={{transition:"stroke-dasharray 1s linear"}}/>
+          </svg>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:C.muted, marginBottom:4 }}>TIME REMAINING</div>
+            <div style={{ display:"flex", alignItems:"baseline", gap:4 }}>
+              {h > 0 && <>
+                <span style={{ fontSize:32, fontWeight:900, color, lineHeight:1 }}>{h}</span>
+                <span style={{ fontSize:11, color:C.muted }}>hr</span>
+              </>}
+              <span style={{ fontSize:32, fontWeight:900, color, lineHeight:1 }}>{pad(m)}</span>
+              <span style={{ fontSize:11, color:C.muted }}>min</span>
+              <span style={{ fontSize:32, fontWeight:900, color, lineHeight:1 }}>{pad(s)}</span>
+              <span style={{ fontSize:11, color:C.muted }}>sec</span>
+            </div>
+            <div style={{ height:4, background:C.border, borderRadius:4, overflow:"hidden", marginTop:6 }}>
+              <div style={{ width:`${pct}%`, height:"100%", background:color, borderRadius:4, transition:"width 1s linear" }}/>
+            </div>
+            <div style={{ fontSize:10, color:C.muted, marginTop:4 }}>
+              Ends at {new Date(endMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}
             </div>
           </div>
-          <div style={{flex:1}}>
-            <div style={{display:"flex",gap:5,alignItems:"baseline"}}>
-              {h>0&&<><span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{h}</span><span style={{fontSize:11,color:C.muted}}>hr</span></>}
-              <span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{pad(m)}</span>
-              <span style={{fontSize:11,color:C.muted}}>min</span>
-              <span style={{fontSize:28,fontWeight:800,color:timerColor,lineHeight:1}}>{pad(sec)}</span>
-              <span style={{fontSize:11,color:C.muted}}>sec</span>
-            </div>
-            <div style={{marginTop:6,width:"100%",height:4,background:C.border,borderRadius:4,overflow:"hidden"}}>
-              <div style={{width:`${pct}%`,height:"100%",background:`linear-gradient(90deg,${timerColor},${timerColor}88)`,borderRadius:4,transition:"width 1s linear"}}/>
-            </div>
-          </div>
         </div>
       </div>
     );
   }
 
-  // ── OVERDUE: extra fee prompt (fires once) ──
-  if (state === "overdue-grace" || extraFeePrompt) {
-    const overMs = now - endMs;
-    const { h:oh, m:om, sec:os } = fmtMs(overMs);
-    const remainGrace = (endMs + 15*60*1000) - now;
-    const { m:gm, sec:gs } = fmtMs(Math.max(0, remainGrace));
-
-    return (
-      <div style={{background:`${C.danger}10`,border:`2px solid ${C.danger}`,borderRadius:14,padding:"14px",marginTop:8}}>
-        <div style={{fontSize:14,fontWeight:800,color:C.danger,marginBottom:4,display:"flex",alignItems:"center",gap:7}}>
-          <Icon name="alert-triangle" size={17} color={C.danger} strokeWidth={2.5}/>Time Expired!
-        </div>
-        <div style={{fontSize:12,color:C.muted,marginBottom:10}}>
-          Overstay: <span style={{color:C.danger,fontWeight:700}}>{oh>0?`${oh}h `:""}{ om}m {pad(os)}s</span>
-          {remainGrace > 0 && <span style={{marginLeft:8,color:C.warn}}>· {gm}:{pad(gs)} to settle before barrier locks</span>}
-        </div>
-        <div style={{background:C.inputBg,borderRadius:10,padding:"10px 12px",marginBottom:12,border:`1px solid ${C.warn}40`}}>
-          <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:6}}>When do you plan to leave?</div>
-          <input type="time" value={leaveTime} onChange={e=>setLeaveTime(e.target.value)}
-            style={{width:"100%",background:"transparent",border:`1.5px solid ${C.warn}`,borderRadius:8,padding:"9px",fontSize:15,fontWeight:800,color:C.warn,outline:"none",fontFamily:"inherit",boxSizing:"border-box",textAlign:"center"}}/>
-          <div style={{fontSize:10,color:C.muted,marginTop:6}}>
-            Extra fee: <span style={{color:C.danger,fontWeight:800}}>
-              KES {(() => {
-                if (!leaveTime) return "—";
-                const d2=new Date(); const [h2,m2]=leaveTime.split(":").map(Number); if(isNaN(h2)) return "—"; d2.setHours(h2,m2,0,0); if(d2.getTime()<Date.now()) d2.setDate(d2.getDate()+1);
-                const overMins = Math.max(15, Math.ceil((d2.getTime()-endMs)/60000));
-                const rate = (booking.price_per_hour||booking.total_amount/booking.hours)||100;
-                return Math.ceil((overMins/60)*rate*1.5).toLocaleString();
-              })()}
-            </span> (1.5× overstay rate)
-          </div>
-        </div>
-        <button onClick={handlePayExtraFee} style={{width:"100%",padding:"12px",background:`linear-gradient(135deg,${C.danger},#B02240)`,border:"none",borderRadius:11,color:"#fff",fontSize:14,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-          <Icon name="credit-card" size={16} color="#fff" strokeWidth={2.5}/>Pay via M-Pesa & Extend
-        </button>
-      </div>
-    );
-  }
-
-  // ── GRACE: 5-minute allowance after paying ──
-  if (state === "grace") {
-    const graceEnd = gracePaidAt + 5*60*1000;
-    const diff = graceEnd - now;
-    const { m, sec } = fmtMs(diff);
-    return (
-      <div style={{background:`${C.warn}12`,border:`2px solid ${C.warn}`,borderRadius:14,padding:"14px",marginTop:8}}>
-        <div style={{fontSize:14,fontWeight:800,color:C.warn,marginBottom:6,display:"flex",alignItems:"center",gap:7}}>
-          <Icon name="clock" size={17} color={C.warn} strokeWidth={2.5}/>5-Minute Exit Allowance
-        </div>
-        <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Payment received. Please exit within:</div>
-        <div style={{display:"flex",gap:5,alignItems:"baseline",marginBottom:8}}>
-          <span style={{fontSize:38,fontWeight:900,color:C.warn,lineHeight:1}}>{pad(m)}</span>
-          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>min</span>
-          <span style={{fontSize:38,fontWeight:900,color:C.warn,lineHeight:1}}>{pad(sec)}</span>
-          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>sec</span>
-        </div>
-        <div style={{width:"100%",height:5,background:C.border,borderRadius:5,overflow:"hidden"}}>
-          <div style={{width:`${(Math.max(0,diff)/(5*60*1000))*100}%`,height:"100%",background:C.warn,borderRadius:5,transition:"width 1s linear"}}/>
-        </div>
-        <div style={{fontSize:11,color:C.warn,fontWeight:700,marginTop:8}}>Drive to the exit now — barrier will open automatically.</div>
-      </div>
-    );
-  }
-
-  // ── OVERSTAY: barrier holds, payment at exit ──
-  if (state === "overstay") {
-    const overstayMs = now - (gracePaidAt ? gracePaidAt + 5*60*1000 : endMs + 15*60*1000);
-    const { h:oh, m:om, sec:os } = fmtMs(overstayMs);
-    return (
-      <div style={{background:`${C.danger}12`,border:`2px solid ${C.danger}`,borderRadius:14,padding:"14px",marginTop:8,textAlign:"center"}}>
-        <div style={{fontSize:14,fontWeight:800,color:C.danger,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
-          <Icon name="x-circle" size={18} color={C.danger} strokeWidth={2.5}/>Barrier Active
-        </div>
-        <div style={{fontSize:12,color:C.muted,marginBottom:8}}>
-          Overstay: <span style={{color:C.danger,fontWeight:800}}>{oh>0?`${oh}h `:""}{om}m {pad(os)}s</span>
-        </div>
-        <div style={{background:C.inputBg,borderRadius:10,padding:"10px",marginBottom:4}}>
-          <div style={{fontSize:12,fontWeight:700,color:C.text}}>Drive to exit gate</div>
-          <div style={{fontSize:11,color:C.muted,marginTop:3}}>Scanner will detect your plate and calculate final fee</div>
-        </div>
-        <div style={{fontSize:10,color:C.muted,marginTop:8}}>
-          Continuing to accrue at standard rate until exit detected
-        </div>
-      </div>
-    );
-  }
-
-  return null;
+  // ── ENDED ─────────────────────────────────────────────────────────────────
+  return (
+    <div style={{ background:`${C.danger}10`, border:`1.5px solid ${C.danger}30`, borderRadius:12, padding:"12px 14px", marginTop:8, textAlign:"center" }}>
+      <div style={{ fontSize:13, fontWeight:800, color:C.danger, marginBottom:4 }}>Session Ended</div>
+      <div style={{ fontSize:11, color:C.muted }}>Drive to the exit gate — barrier will open for your plate</div>
+    </div>
+  );
 }
 
 // ─── BOOKINGS SCREEN ──────────────────────────────────────────────────────────
@@ -1490,19 +1357,14 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Use the same resolveBookingTimes function to stay consistent
-  const isCancellable = (b) => {
-    if (b.status !== "confirmed") return false;
-    const { startMs } = resolveBookingTimes(b);
-    return Date.now() < startMs;
-  };
-
-  // Booking is "in progress" (started but not ended)
-  const isInProgress = (b) => {
-    if (b.status !== "confirmed") return false;
+  // Uses same resolveBookingTimes as CountdownTimer for consistency
+  const getPhase = (b) => {
+    if (b.status !== "confirmed") return "done";
     const { startMs, endMs } = resolveBookingTimes(b);
     const now = Date.now();
-    return now >= startMs && now < endMs;
+    if (now < startMs) return "waiting";   // show cancel button
+    if (now < endMs)   return "parking";   // show exit early button
+    return "ended";
   };
 
   const requestCancel = (b) => { setConfirmId(b.id); };
@@ -1695,16 +1557,14 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
                 <span style={{width:7,height:7,borderRadius:"50%",background:C.accent,display:"inline-block"}}/>Active Sessions
               </div>
               {active.map(b => {
-                const cancellable = isCancellable(b);
-                const inProgress = isInProgress(b);
+                const phase = getPhase(b);
                 const isCancellingThis = cancelling === b.id;
-                return (
-                  <Card key={b.id} style={{marginBottom:13,border:`1px solid ${cancellable?C.blue+"60":inProgress?C.accent+"40":C.border}`}}>
+                  <Card key={b.id} style={{marginBottom:13,border:`1px solid ${phase==="waiting"?C.blue+"60":phase==="parking"?C.accent+"40":C.border}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                       <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
                       <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                        {cancellable && <span style={{fontSize:9,fontWeight:700,color:C.blue,background:`${C.blue}15`,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>UPCOMING</span>}
-                        {inProgress && <span style={{fontSize:9,fontWeight:700,color:C.accent,background:C.accentSoft,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>IN PROGRESS</span>}
+                        {phase==="waiting" && <span style={{fontSize:9,fontWeight:700,color:C.blue,background:`${C.blue}15`,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>UPCOMING</span>}
+                        {phase==="parking" && <span style={{fontSize:9,fontWeight:700,color:C.accent,background:C.accentSoft,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>IN PROGRESS</span>}
                         <Badge color={C.accent}>Active</Badge>
                       </div>
                     </div>
@@ -1727,7 +1587,7 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
 
                     {/* Action buttons */}
                     <div style={{marginTop:11,display:"flex",gap:8}}>
-                      {cancellable && (
+                      {phase==="waiting" && (
                         <button
                           onClick={()=>requestCancel(b)}
                           disabled={isCancellingThis}
@@ -1737,7 +1597,7 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
                             : <><Icon name="x-circle" size={13} color={C.danger} strokeWidth={2.5}/>Cancel & Refund</>}
                         </button>
                       )}
-                      {inProgress && (
+                      {phase==="parking" && (
                         <button
                           onClick={()=>setEarlyExitId(b.id)}
                           disabled={isCancellingThis}
@@ -1745,9 +1605,9 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
                           <Icon name="log-out" size={13} color={C.blue} strokeWidth={2.5}/>Exit Early
                         </button>
                       )}
-                      {!cancellable && !inProgress && (
+                      {phase==="ended" && (
                         <div style={{flex:1,padding:"8px 10px",background:C.inputBg,borderRadius:9,fontSize:11,color:C.muted,textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                          <Icon name="info" size={12} color={C.muted}/>Session ended
+                          <Icon name="info" size={12} color={C.muted}/>Session ended — drive to exit gate
                         </div>
                       )}
                     </div>
