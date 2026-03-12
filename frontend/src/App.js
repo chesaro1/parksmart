@@ -2343,11 +2343,31 @@ export default function App() {
 
   return (
     <ThemeCtx.Provider value={C}>
-      <div style={{display:"flex",justifyContent:"center",alignItems:"center",minHeight:"100vh",background:isDark?"#050810":"#E8ECF4",fontFamily:"'DM Sans','Segoe UI',sans-serif",transition:"background 0.3s"}}>
-        <div style={{width:390,height:780,background:C.bg,borderRadius:44,overflow:"hidden",position:"relative",boxShadow:C.shadow,transition:"background 0.3s"}}>
+      <div style={{
+        display:"flex", justifyContent:"center", alignItems:"center",
+        minHeight:"100vh", minHeight:"100dvh",
+        background: isDark ? "#050810" : "#E8ECF4",
+        fontFamily:"'DM Sans','Segoe UI',sans-serif",
+        transition:"background 0.3s"
+      }}>
+        {/* On real phones: fills full screen. On desktop: shows as phone mockup */}
+        <div style={{
+          width: "min(390px, 100vw)",
+          height: "min(780px, 100dvh)",
+          background: C.bg,
+          borderRadius: "clamp(0px, calc((100vw - 390px) * 999), 44px)",
+          overflow: "hidden",
+          position: "relative",
+          boxShadow: C.shadow,
+          transition: "background 0.3s"
+        }}>
 
-          {/* Notch */}
-          <div style={{width:110,height:26,background:"#000",borderRadius:20,position:"absolute",left:"50%",transform:"translateX(-50%)",top:0,zIndex:50}}/>
+          {/* Notch — hidden on real phones (they have native notch) */}
+          <div style={{
+            width:110, height:26, background:"#000", borderRadius:20,
+            position:"absolute", left:"50%", transform:"translateX(-50%)", top:0, zIndex:50,
+            display: window.innerWidth <= 390 ? "none" : "block"
+          }}/>
 
           {/* Theme toggle */}
           <button onClick={toggleTheme} style={{position:"absolute",top:30,right:18,zIndex:60,background:C.card,border:`1px solid ${C.border}`,borderRadius:"50%",width:32,height:32,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>
@@ -2368,7 +2388,7 @@ export default function App() {
                   {tab==="account"  && <AccountScreen user={user} setUser={setUser} onLogout={logout} walletBalance={walletBalance} onWalletChange={setWalletBalance}/>}
                 </div>
 
-                <div style={{background:C.navBg,borderTop:`1px solid ${C.border}`,display:"flex",height:68,paddingBottom:8,flexShrink:0}}>
+                <div style={{background:C.navBg,borderTop:`1px solid ${C.border}`,display:"flex",height:68,paddingBottom:"max(8px, env(safe-area-inset-bottom))",flexShrink:0}}>
                   {navItems.map(([id,icon,label])=>(
                     <button key={id} onClick={()=>setTab(id)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,background:"none",border:"none",cursor:"pointer",position:"relative"}}>
                       <Icon name={icon} size={22} color={tab===id?C.accent:C.muted} strokeWidth={tab===id?2:1.5}/>
