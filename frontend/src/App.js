@@ -604,9 +604,8 @@ function BookingModal({ spot, user, onClose, onSuccess, walletBalance, onWalletC
   const [plate, setPlate] = useState((user?.vehicles||[])[0]||"");
   const [phone, setPhone] = useState(user?.phone||"");
   const [spotNumber, setSpotNumber] = useState(null);
-  const [step, setStep] = useState("form"); // form | wallet-confirm | topup | paying | done
+  const [step, setStep] = useState("form"); // form | wallet-confirm | paying
   const [error, setError] = useState("");
-  const [topupAmt, setTopupAmt] = useState("");
 
   const hours = timeDiffHours(startTime, endTime);
   const total = Math.round((spot.price_per_hour||0) * hours);
