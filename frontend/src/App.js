@@ -1147,24 +1147,35 @@ function AccountScreen({ user, setUser, onLogout, walletBalance, onWalletChange 
 function resolveBookingTimes(booking) {
   const createdAt = new Date(booking.created_at).getTime();
 
-  const toMs = (field, fallbackMs) => {
+  const toMs = (field, fallbackMs, afterMs) => {
     const val = booking[field];
     if (!val) return fallbackMs;
+    // Full ISO timestamp — use directly
     if (typeof val === "string" && (val.includes("T") || val.includes("Z")))
       return new Date(val).getTime();
+    // HH:MM string — resolve relative to created_at date
     if (typeof val === "string" && val.includes(":")) {
       const [h, m] = val.split(":").map(Number);
       if (isNaN(h)) return fallbackMs;
       const d = new Date(createdAt);
       d.setHours(h, m, 0, 0);
-      return d.getTime();
+      let ms = d.getTime();
+      // If the resolved time is before the "after" anchor, it must be next day
+      if (afterMs !== undefined && ms <= afterMs) ms += 24 * 3600 * 1000;
+      return ms;
     }
     return fallbackMs;
   };
 
-  const startMs = toMs("start_time", createdAt);
-  let endMs = toMs("end_time", startMs + (booking.hours || 1) * 3600 * 1000);
+  // startMs: must be >= createdAt (can't start before booking was made)
+  let startMs = toMs("start_time", createdAt, createdAt - 1);
+  // If start resolved to before booking was created, push to next day
+  if (startMs < createdAt - 60 * 1000) startMs += 24 * 3600 * 1000;
+
+  // endMs: must be > startMs
+  let endMs = toMs("end_time", startMs + (booking.hours || 1) * 3600 * 1000, startMs);
   if (endMs <= startMs) endMs += 24 * 3600 * 1000;
+
   return { startMs, endMs };
 }
 
@@ -1243,27 +1254,80 @@ function CountdownTimer({ booking, onExtraFeeTriggered }) {
     return { h: Math.floor(s/3600), m: Math.floor((s%3600)/60), sec: s%60, total: s };
   };
 
-  // ── PENDING: show pre-start countdown ──
+  // ── PENDING / PRE-WARN: countdown TO start time ──
   if (state === "pending" || state === "pre-warn") {
-    const diff = startMs - now;
+    const diff = Math.max(0, startMs - now);
     const { h, m, sec } = fmtMs(diff);
     const isPre = state === "pre-warn";
+    const color = isPre ? C.warn : C.blue;
+
+    // Total time from booking-created to start, for the progress bar
+    const bookingCreatedMs = new Date(booking.created_at).getTime();
+    const totalWait = Math.max(1, startMs - bookingCreatedMs);
+    const elapsed = Math.max(0, now - bookingCreatedMs);
+    const pct = Math.min(100, (elapsed / totalWait) * 100);
+
     return (
-      <div style={{background:isPre?`${C.warn}12`:C.accentSoft,border:`1.5px solid ${isPre?C.warn:C.accent}30`,borderRadius:12,padding:"12px 14px",marginTop:8}}>
-        <div style={{fontSize:11,fontWeight:700,color:isPre?C.warn:C.accent,marginBottom:6,display:"flex",alignItems:"center",gap:6}}>
-          <Icon name="clock" size={14} color={isPre?C.warn:C.accent} strokeWidth={2.5}/>
-          {isPre ? "⚠ Parking starts in less than 5 minutes!" : "Parking starts in"}
+      <div style={{background:isPre?`${C.warn}12`:`${C.blue}10`,border:`1.5px solid ${color}40`,borderRadius:14,padding:"14px",marginTop:8}}>
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <div style={{width:34,height:34,borderRadius:10,background:`${color}15`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+              <Icon name={isPre?"alert-triangle":"clock"} size={17} color={color} strokeWidth={2.5}/>
+            </div>
+            <div>
+              <div style={{fontSize:12,fontWeight:800,color:color}}>
+                {isPre ? "Starting very soon!" : "Parking not started yet"}
+              </div>
+              <div style={{fontSize:10,color:C.muted}}>
+                Starts at {new Date(startMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}
+              </div>
+            </div>
+          </div>
+          <div style={{background:`${color}15`,borderRadius:20,padding:"3px 10px",fontSize:10,fontWeight:700,color:color}}>
+            UPCOMING
+          </div>
         </div>
-        <div style={{display:"flex",gap:6,alignItems:"baseline"}}>
-          {h > 0 && <><span style={{fontSize:28,fontWeight:900,color:isPre?C.warn:C.accent}}>{h}</span><span style={{fontSize:11,color:C.muted}}>hr</span></>}
-          <span style={{fontSize:28,fontWeight:900,color:isPre?C.warn:C.accent}}>{pad(m)}</span>
-          <span style={{fontSize:11,color:C.muted}}>min</span>
-          <span style={{fontSize:28,fontWeight:900,color:isPre?C.warn:C.accent}}>{pad(sec)}</span>
-          <span style={{fontSize:11,color:C.muted}}>sec</span>
+
+        {/* Big countdown numbers */}
+        <div style={{display:"flex",alignItems:"baseline",gap:4,marginBottom:10,justifyContent:"center"}}>
+          {h > 0 && (
+            <>
+              <span style={{fontSize:42,fontWeight:900,color:color,lineHeight:1}}>{h}</span>
+              <span style={{fontSize:13,color:C.muted,fontWeight:600,marginRight:6}}>hr</span>
+            </>
+          )}
+          <span style={{fontSize:42,fontWeight:900,color:color,lineHeight:1}}>{pad(m)}</span>
+          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>min</span>
+          <span style={{fontSize:42,fontWeight:900,color:color,lineHeight:1}}>{pad(sec)}</span>
+          <span style={{fontSize:13,color:C.muted,fontWeight:600}}>sec</span>
         </div>
-        <div style={{fontSize:11,color:C.muted,marginTop:5}}>
-          Session starts at {new Date(startMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}
+
+        {/* Progress bar — fills as start time approaches */}
+        <div style={{marginBottom:8}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted,marginBottom:4}}>
+            <span>Booked</span>
+            <span>Start time</span>
+          </div>
+          <div style={{width:"100%",height:6,background:C.border,borderRadius:6,overflow:"hidden"}}>
+            <div style={{
+              width:`${pct}%`, height:"100%",
+              background:`linear-gradient(90deg,${color},${color}88)`,
+              borderRadius:6, transition:"width 1s linear"
+            }}/>
+          </div>
         </div>
+
+        {isPre && (
+          <div style={{background:`${C.warn}15`,borderRadius:9,padding:"8px 10px",fontSize:11,color:C.warn,fontWeight:700,textAlign:"center"}}>
+            ⚠ Head to the parking spot now — your session begins in under 5 minutes!
+          </div>
+        )}
+        {!isPre && (
+          <div style={{fontSize:11,color:C.muted,textAlign:"center"}}>
+            Your spot is reserved · Countdown begins at start time
+          </div>
+        )}
       </div>
     );
   }
