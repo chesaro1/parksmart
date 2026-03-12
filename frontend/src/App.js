@@ -1479,9 +1479,10 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
   const C = useTheme();
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [cancelling, setCancelling] = useState(null);      // booking id being cancelled
-  const [confirmId, setConfirmId] = useState(null);        // id awaiting confirm dialog
-  const [refundMsg, setRefundMsg] = useState(null);        // { amount, spotName }
+  const [cancelling, setCancelling] = useState(null);
+  const [confirmId, setConfirmId] = useState(null);
+  const [earlyExitId, setEarlyExitId] = useState(null);   // booking id for early exit dialog
+  const [refundMsg, setRefundMsg] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1492,25 +1493,22 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Determine if a booking is still cancellable (start time hasn't been reached)
+  // Use the same resolveBookingTimes function to stay consistent
   const isCancellable = (b) => {
     if (b.status !== "confirmed") return false;
-    const startMs = (() => {
-      if (b.start_time) {
-        if (b.start_time.includes("T")) return new Date(b.start_time).getTime();
-        const d = new Date(b.created_at);
-        const [h,m] = b.start_time.split(":").map(Number);
-        if (!isNaN(h)) { d.setHours(h,m,0,0); return d.getTime(); }
-      }
-      return new Date(b.created_at).getTime();
-    })();
+    const { startMs } = resolveBookingTimes(b);
     return Date.now() < startMs;
   };
 
-  const requestCancel = (b) => {
-    if (!isCancellable(b)) return;
-    setConfirmId(b.id);
+  // Booking is "in progress" (started but not ended)
+  const isInProgress = (b) => {
+    if (b.status !== "confirmed") return false;
+    const { startMs, endMs } = resolveBookingTimes(b);
+    const now = Date.now();
+    return now >= startMs && now < endMs;
   };
+
+  const requestCancel = (b) => { setConfirmId(b.id); };
 
   const confirmCancel = async () => {
     const b = bookings.find(x => x.id === confirmId);
@@ -1519,15 +1517,51 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
     setCancelling(b.id);
     try {
       await bookingsApi.cancel(b.id);
-      // Refund full amount back to wallet
       const refundAmt = b.total_amount || 0;
       onWalletChange(prev => {
         const next = prev + refundAmt;
         localStorage.setItem(`ps_wallet_${user.id}`, String(next));
         return next;
       });
-      setRefundMsg({ amount: refundAmt, spotName: b.spot_name });
-      setTimeout(() => setRefundMsg(null), 5000);
+      setRefundMsg({ amount: refundAmt, spotName: b.spot_name, type: "cancel" });
+      setTimeout(() => setRefundMsg(null), 6000);
+      await load();
+    } catch(e) {}
+    finally { setCancelling(null); }
+  };
+
+  // Early exit — calculate refund for unused time
+  const calcEarlyRefund = (b) => {
+    const { startMs, endMs } = resolveBookingTimes(b);
+    const now = Date.now();
+    const totalMs = endMs - startMs;
+    const usedMs = Math.max(0, now - startMs);
+    const unusedMs = Math.max(0, totalMs - usedMs);
+    const unusedHours = unusedMs / 3600000;
+    const ratePerHour = (b.total_amount || 0) / (b.hours || 1);
+    const refund = Math.floor(unusedHours * ratePerHour);
+    const usedHours = usedMs / 3600000;
+    const charged = Math.ceil(usedHours * ratePerHour);
+    return { refund, charged, unusedMins: Math.floor(unusedMs / 60000) };
+  };
+
+  const confirmEarlyExit = async () => {
+    const b = bookings.find(x => x.id === earlyExitId);
+    if (!b) return;
+    const { refund } = calcEarlyRefund(b);
+    setEarlyExitId(null);
+    setCancelling(b.id);
+    try {
+      await bookingsApi.cancel(b.id);
+      if (refund > 0) {
+        onWalletChange(prev => {
+          const next = prev + refund;
+          localStorage.setItem(`ps_wallet_${user.id}`, String(next));
+          return next;
+        });
+      }
+      setRefundMsg({ amount: refund, spotName: b.spot_name, type: "early" });
+      setTimeout(() => setRefundMsg(null), 6000);
       await load();
     } catch(e) {}
     finally { setCancelling(null); }
@@ -1551,39 +1585,99 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
           <div style={{fontSize:20,fontWeight:900,color:C.accent}}>KES {walletBalance.toLocaleString()}</div>
         </div>
         <div style={{marginLeft:"auto",fontSize:10,color:C.muted,textAlign:"right",lineHeight:1.5}}>
-          Cancellation refunds<br/>go here instantly
+          Refunds go<br/>here instantly
         </div>
       </div>
 
-      {/* Refund toast */}
+      {/* Refund / early-exit toast */}
       {refundMsg && (
         <div style={{background:`${C.accent}15`,border:`1.5px solid ${C.accent}`,borderRadius:12,padding:"12px 14px",marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
           <Icon name="check-circle" size={18} color={C.accent} strokeWidth={2.5}/>
           <div>
-            <div style={{fontSize:13,fontWeight:800,color:C.accent}}>Refund processed!</div>
-            <div style={{fontSize:12,color:C.muted}}>KES {refundMsg.amount.toLocaleString()} returned to your wallet from {refundMsg.spotName}</div>
+            <div style={{fontSize:13,fontWeight:800,color:C.accent}}>
+              {refundMsg.type==="early" ? "Early exit confirmed!" : "Cancellation refunded!"}
+            </div>
+            <div style={{fontSize:12,color:C.muted}}>
+              {refundMsg.amount > 0
+                ? `KES ${refundMsg.amount.toLocaleString()} refunded to your wallet`
+                : "No unused time to refund"}
+              {" · "}{refundMsg.spotName}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Cancel confirm dialog */}
+      {/* ── CANCEL CONFIRM DIALOG ── */}
       {confirmId && (() => {
         const b = bookings.find(x=>x.id===confirmId);
         return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
             <div style={{background:C.card,borderRadius:20,padding:"24px 20px",width:"100%",maxWidth:340,border:`1px solid ${C.border}`}}>
               <div style={{fontSize:17,fontWeight:800,color:C.text,marginBottom:8}}>Cancel Booking?</div>
-              <div style={{fontSize:13,color:C.muted,marginBottom:16,lineHeight:1.6}}>
-                Your booking at <span style={{color:C.text,fontWeight:700}}>{b?.spot_name}</span> will be cancelled and{" "}
-                <span style={{color:C.accent,fontWeight:800}}>KES {(b?.total_amount||0).toLocaleString()}</span> will be refunded to your ParkSmart wallet instantly.
+              <div style={{fontSize:13,color:C.muted,marginBottom:14,lineHeight:1.6}}>
+                Cancel your booking at <span style={{color:C.text,fontWeight:700}}>{b?.spot_name}</span>?{" "}
+                The full <span style={{color:C.accent,fontWeight:800}}>KES {(b?.total_amount||0).toLocaleString()}</span> will be refunded to your wallet instantly.
               </div>
               <div style={{background:`${C.warn}12`,border:`1px solid ${C.warn}30`,borderRadius:10,padding:"10px 12px",marginBottom:16,fontSize:12,color:C.warn,display:"flex",alignItems:"center",gap:7}}>
                 <Icon name="alert-triangle" size={14} color={C.warn} strokeWidth={2.5}/>
-                Cancellation only allowed before parking starts
+                Cancellation only available before your parking starts
               </div>
               <div style={{display:"flex",gap:10}}>
                 <button onClick={()=>setConfirmId(null)} style={{flex:1,padding:"12px",background:"transparent",border:`1.5px solid ${C.border}`,borderRadius:11,color:C.muted,fontSize:13,fontWeight:700,cursor:"pointer"}}>Keep it</button>
                 <button onClick={confirmCancel} style={{flex:1,padding:"12px",background:`linear-gradient(135deg,${C.danger},#B02240)`,border:"none",borderRadius:11,color:"#fff",fontSize:13,fontWeight:800,cursor:"pointer"}}>Yes, Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── EARLY EXIT CONFIRM DIALOG ── */}
+      {earlyExitId && (() => {
+        const b = bookings.find(x=>x.id===earlyExitId);
+        if (!b) return null;
+        const { refund, charged, unusedMins } = calcEarlyRefund(b);
+        return (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+            <div style={{background:C.card,borderRadius:20,padding:"24px 20px",width:"100%",maxWidth:340,border:`1px solid ${C.border}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                <div style={{width:40,height:40,borderRadius:12,background:`${C.blue}15`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <Icon name="log-out" size={20} color={C.blue} strokeWidth={2.5}/>
+                </div>
+                <div style={{fontSize:17,fontWeight:800,color:C.text}}>Exit Early?</div>
+              </div>
+              <div style={{fontSize:13,color:C.muted,marginBottom:14,lineHeight:1.6}}>
+                You booked for <span style={{color:C.text,fontWeight:700}}>{b.hours}hr{b.hours>1?"s":""}</span> but you're leaving early.
+                We'll calculate what you actually used.
+              </div>
+
+              {/* Cost breakdown */}
+              <div style={{background:C.inputBg,borderRadius:12,padding:"12px 14px",marginBottom:14,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:0.5,marginBottom:10}}>Billing Summary</div>
+                {[
+                  ["Total paid", `KES ${(b.total_amount||0).toLocaleString()}`, C.text],
+                  ["Time used", `~${Math.ceil((b.hours*60 - unusedMins))} min`, C.muted],
+                  ["Unused time", `~${unusedMins} min`, C.muted],
+                  ["Amount charged", `KES ${charged.toLocaleString()}`, C.warn],
+                  ["Refund to wallet", `KES ${refund.toLocaleString()}`, C.accent],
+                ].map(([k,v,col])=>(
+                  <div key={k} style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:5,paddingBottom:5,borderBottom:k==="Refund to wallet"?"none":`1px solid ${C.border}30`}}>
+                    <span style={{color:C.muted}}>{k}</span>
+                    <span style={{fontWeight:700,color:col}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {refund === 0 && (
+                <div style={{background:`${C.warn}12`,borderRadius:10,padding:"9px 12px",marginBottom:14,fontSize:12,color:C.warn,textAlign:"center"}}>
+                  No refund — you've used most of your booked time
+                </div>
+              )}
+
+              <div style={{display:"flex",gap:10}}>
+                <button onClick={()=>setEarlyExitId(null)} style={{flex:1,padding:"12px",background:"transparent",border:`1.5px solid ${C.border}`,borderRadius:11,color:C.muted,fontSize:13,fontWeight:700,cursor:"pointer"}}>Stay</button>
+                <button onClick={confirmEarlyExit} style={{flex:1,padding:"12px",background:`linear-gradient(135deg,${C.blue},#2860B0)`,border:"none",borderRadius:11,color:"#fff",fontSize:13,fontWeight:800,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                  <Icon name="log-out" size={14} color="#fff" strokeWidth={2.5}/>Exit & Refund
+                </button>
               </div>
             </div>
           </div>
@@ -1605,15 +1699,15 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
               </div>
               {active.map(b => {
                 const cancellable = isCancellable(b);
-                const isCancelling = cancelling === b.id;
+                const inProgress = isInProgress(b);
+                const isCancellingThis = cancelling === b.id;
                 return (
-                  <Card key={b.id} style={{marginBottom:13,border:`1px solid ${cancellable?C.accent+"50":C.border}`}}>
+                  <Card key={b.id} style={{marginBottom:13,border:`1px solid ${cancellable?C.blue+"60":inProgress?C.accent+"40":C.border}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                       <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
                       <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                        {cancellable && (
-                          <span style={{fontSize:9,fontWeight:700,color:C.accent,background:C.accentSoft,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>CANCELLABLE</span>
-                        )}
+                        {cancellable && <span style={{fontSize:9,fontWeight:700,color:C.blue,background:`${C.blue}15`,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>UPCOMING</span>}
+                        {inProgress && <span style={{fontSize:9,fontWeight:700,color:C.accent,background:C.accentSoft,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>IN PROGRESS</span>}
                         <Badge color={C.accent}>Active</Badge>
                       </div>
                     </div>
@@ -1631,22 +1725,35 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
                         <Icon name="hash" size={12} color={C.muted}/>Spot #{b.spot_number}
                       </div>
                     )}
+
                     <CountdownTimer booking={b}/>
 
-                    {cancellable ? (
-                      <button
-                        onClick={()=>requestCancel(b)}
-                        disabled={isCancelling}
-                        style={{marginTop:11,width:"100%",padding:"10px",background:`${C.danger}10`,border:`1.5px solid ${C.danger}`,borderRadius:10,color:C.danger,fontSize:13,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                        {isCancelling
-                          ? <><div className="spin" style={{width:14,height:14,borderRadius:"50%",border:`2px solid ${C.danger}40`,borderTop:`2px solid ${C.danger}`}}/>Cancelling…</>
-                          : <><Icon name="x-circle" size={15} color={C.danger} strokeWidth={2.5}/>Cancel & Refund KES {(b.total_amount||0).toLocaleString()}</>}
-                      </button>
-                    ) : (
-                      <div style={{marginTop:10,padding:"8px 10px",background:C.inputBg,borderRadius:9,fontSize:11,color:C.muted,textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                        <Icon name="info" size={12} color={C.muted}/>Parking in progress — cancellation not available
-                      </div>
-                    )}
+                    {/* Action buttons */}
+                    <div style={{marginTop:11,display:"flex",gap:8}}>
+                      {cancellable && (
+                        <button
+                          onClick={()=>requestCancel(b)}
+                          disabled={isCancellingThis}
+                          style={{flex:1,padding:"10px",background:`${C.danger}10`,border:`1.5px solid ${C.danger}`,borderRadius:10,color:C.danger,fontSize:12,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                          {isCancellingThis
+                            ? <><div className="spin" style={{width:12,height:12,borderRadius:"50%",border:`2px solid ${C.danger}40`,borderTop:`2px solid ${C.danger}`}}/>Cancelling…</>
+                            : <><Icon name="x-circle" size={13} color={C.danger} strokeWidth={2.5}/>Cancel & Refund</>}
+                        </button>
+                      )}
+                      {inProgress && (
+                        <button
+                          onClick={()=>setEarlyExitId(b.id)}
+                          disabled={isCancellingThis}
+                          style={{flex:1,padding:"10px",background:`${C.blue}10`,border:`1.5px solid ${C.blue}`,borderRadius:10,color:C.blue,fontSize:12,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+                          <Icon name="log-out" size={13} color={C.blue} strokeWidth={2.5}/>Exit Early
+                        </button>
+                      )}
+                      {!cancellable && !inProgress && (
+                        <div style={{flex:1,padding:"8px 10px",background:C.inputBg,borderRadius:9,fontSize:11,color:C.muted,textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                          <Icon name="info" size={12} color={C.muted}/>Session ended
+                        </div>
+                      )}
+                    </div>
                   </Card>
                 );
               })}
@@ -1671,7 +1778,7 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
                   </div>
                   {b.status==="cancelled" && (
                     <div style={{fontSize:11,marginTop:5,display:"flex",alignItems:"center",gap:5,color:C.accent}}>
-                      <Icon name="check-circle" size={12} color={C.accent}/>KES {(b.total_amount||0).toLocaleString()} refunded to wallet
+                      <Icon name="check-circle" size={12} color={C.accent}/>Refunded to wallet
                     </div>
                   )}
                   <div style={{fontSize:11,color:C.muted,marginTop:4}}>
