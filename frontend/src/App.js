@@ -1147,34 +1147,31 @@ function AccountScreen({ user, setUser, onLogout, walletBalance, onWalletChange 
 function resolveBookingTimes(booking) {
   const createdAt = new Date(booking.created_at).getTime();
 
-  const toMs = (field, fallbackMs, afterMs) => {
-    const val = booking[field];
-    if (!val) return fallbackMs;
-    // Full ISO timestamp — use directly
-    if (typeof val === "string" && (val.includes("T") || val.includes("Z")))
-      return new Date(val).getTime();
-    // HH:MM string — resolve relative to created_at date
-    if (typeof val === "string" && val.includes(":")) {
-      const [h, m] = val.split(":").map(Number);
-      if (isNaN(h)) return fallbackMs;
-      const d = new Date(createdAt);
-      d.setHours(h, m, 0, 0);
-      let ms = d.getTime();
-      // If the resolved time is before the "after" anchor, it must be next day
-      if (afterMs !== undefined && ms <= afterMs) ms += 24 * 3600 * 1000;
-      return ms;
+  // Backend stores arrive_at (start) and expires_at (end) as ISO strings.
+  // Also handles HH:MM strings and start_time/end_time aliases.
+  const parseField = (...fields) => {
+    for (const f of fields) {
+      const val = booking[f];
+      if (!val) continue;
+      if (typeof val === "string" && (val.includes("T") || val.includes("Z"))) {
+        const ms = new Date(val).getTime();
+        if (!isNaN(ms)) return ms;
+      }
+      if (typeof val === "string" && /^\d{1,2}:\d{2}$/.test(val)) {
+        const [h, m] = val.split(":").map(Number);
+        const d = new Date(createdAt);
+        d.setHours(h, m, 0, 0);
+        let ms = d.getTime();
+        if (ms < createdAt - 60 * 1000) ms += 24 * 3600 * 1000;
+        return ms;
+      }
     }
-    return fallbackMs;
+    return null;
   };
 
-  // startMs: must be >= createdAt (can't start before booking was made)
-  let startMs = toMs("start_time", createdAt, createdAt - 1);
-  // If start resolved to before booking was created, push to next day
-  if (startMs < createdAt - 60 * 1000) startMs += 24 * 3600 * 1000;
-
-  // endMs: must be > startMs
-  let endMs = toMs("end_time", startMs + (booking.hours || 1) * 3600 * 1000, startMs);
-  if (endMs <= startMs) endMs += 24 * 3600 * 1000;
+  const startMs = parseField("arrive_at", "start_time") ?? createdAt;
+  const rawEnd  = parseField("expires_at", "end_time") ?? (startMs + (booking.hours || 1) * 3600 * 1000);
+  const endMs   = rawEnd <= startMs ? rawEnd + 24 * 3600 * 1000 : rawEnd;
 
   return { startMs, endMs };
 }
