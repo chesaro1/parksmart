@@ -229,6 +229,15 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
   }).select("*").single();
 
   if (error) return res.status(500).json({ error: "Booking failed" });
+
+  // Reserve the spot — decrement available_spaces immediately on booking
+  await supabase.from("spots")
+    .update({ available_spaces: Math.max(0, (spot.available_spaces || 0) - 1) })
+    .eq("id", spotId);
+
+  // Broadcast real-time update
+  io.emit("spot:updated", { spotId, available: Math.max(0, (spot.available_spaces || 0) - 1), total: spot.total_spaces });
+
   res.status(201).json({ booking });
 });
 
@@ -246,9 +255,13 @@ app.delete("/api/bookings/:id", requireAuth, async (req, res) => {
   const { data: updated } = await supabase.from("bookings").update({ status: "cancelled", updated_at: new Date().toISOString() })
     .eq("id", req.params.id).select("*").single();
 
-  // Broadcast real-time availability update
+  // Release the reserved spot — restore available_spaces
   const { data: spot } = await supabase.from("spots").select("available_spaces,total_spaces").eq("id", booking.spot_id).single();
-  if (spot) io.emit("spot:updated", { spotId: booking.spot_id, available: spot.available_spaces, total: spot.total_spaces });
+  if (spot) {
+    const newAvail = Math.min(spot.total_spaces || 999, (spot.available_spaces || 0) + 1);
+    await supabase.from("spots").update({ available_spaces: newAvail }).eq("id", booking.spot_id);
+    io.emit("spot:updated", { spotId: booking.spot_id, available: newAvail, total: spot.total_spaces });
+  }
 
   res.json({ message: "Booking cancelled", booking: updated });
 });
@@ -491,7 +504,10 @@ async function processScan(scannerId, plate) {
   if (booking) {
     if (scanner.role === "exit") {
       await supabase.from("bookings").update({ status:"completed", updated_at:timestamp }).eq("id", booking.id);
-      await supabase.from("space_events").insert({ spot_id:scanner.spotId, available_spaces:(spot?.available_spaces||0)+1, event_type:"exit", triggered_by:scannerId });
+      // Restore the reserved space when car exits
+      const newAvail = Math.min((spot?.total_spaces||999), (spot?.available_spaces||0)+1);
+      await supabase.from("spots").update({ available_spaces: newAvail }).eq("id", scanner.spotId);
+      await supabase.from("space_events").insert({ spot_id:scanner.spotId, available_spaces:newAvail, event_type:"exit", triggered_by:scannerId });
     }
     io.to(`user:${booking.user_id}`).emit("gate:opened", { scannerId, spotName:spot?.name, plate, timestamp });
     // Broadcast updated availability
