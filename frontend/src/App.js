@@ -1559,8 +1559,8 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
               {active.map(b => {
                 const phase = getPhase(b);
                 const isCancellingThis = cancelling === b.id;
+                return (
                   <Card key={b.id} style={{marginBottom:13,border:`1px solid ${phase==="waiting"?C.blue+"60":phase==="parking"?C.accent+"40":C.border}`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                       <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{b.id?.slice(0,8)}…</span>
                       <div style={{display:"flex",gap:6,alignItems:"center"}}>
                         {phase==="waiting" && <span style={{fontSize:9,fontWeight:700,color:C.blue,background:`${C.blue}15`,padding:"2px 8px",borderRadius:20,letterSpacing:0.5}}>UPCOMING</span>}
