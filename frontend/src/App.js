@@ -658,9 +658,11 @@ function BookingModal({ spot, user, onClose, onSuccess, walletBalance, onWalletC
         // Simulate wallet top-up credit
         await walletApi.topUp({ amount: walletSuffix, source: "mpesa" });
       }
-      // Deduct full amount from wallet
-      await walletApi.deduct({ amount: total, description: `Parking at ${spot.name}` });
-      onWalletChange(prev => Math.max(0, prev - total));
+      // Deduct full amount from wallet — get confirmed balance back from API
+      const deductRes = await walletApi.deduct({ amount: total, description: `Parking at ${spot.name}` });
+      const newBal = deductRes.balance ?? Math.max(0, walletBalance - total);
+      onWalletChange(newBal);
+      localStorage.setItem(`ps_wallet_${user.id}`, String(newBal));
       // Create booking (no STK since wallet covered it)
       const { booking } = await bookingsApi.create({
         spotId: spot.id, hours: parseFloat(hours.toFixed(4)),
@@ -1398,7 +1400,15 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
     try {
       await bookingsApi.cancel(b.id);
       const amt = b.total_amount || 0;
-      onWalletChange(prev => { const n = prev + amt; localStorage.setItem(`ps_wallet_${user.id}`, String(n)); return n; });
+      try {
+        const refundRes = await walletApi.refund({ amount: amt });
+        const newBal = refundRes.balance ?? 0;
+        onWalletChange(newBal);
+        localStorage.setItem(`ps_wallet_${user.id}`, String(newBal));
+      } catch {
+        // API refund failed — optimistically update UI anyway
+        onWalletChange(prev => { const n = prev + amt; localStorage.setItem(`ps_wallet_${user.id}`, String(n)); return n; });
+      }
       setRefundMsg({ amount: amt, spotName: b.spot_name, type: "cancel" });
       setTimeout(() => setRefundMsg(null), 5000);
       await load();
@@ -1426,7 +1436,14 @@ function BookingsScreen({ user, walletBalance, onWalletChange }) {
     try {
       await bookingsApi.cancel(b.id);
       if (refund > 0) {
-        onWalletChange(prev => { const n = prev + refund; localStorage.setItem(`ps_wallet_${user.id}`, String(n)); return n; });
+        try {
+          const refundRes = await walletApi.refund({ amount: refund });
+          const newBal = refundRes.balance ?? 0;
+          onWalletChange(newBal);
+          localStorage.setItem(`ps_wallet_${user.id}`, String(newBal));
+        } catch {
+          onWalletChange(prev => { const n = prev + refund; localStorage.setItem(`ps_wallet_${user.id}`, String(n)); return n; });
+        }
       }
       setRefundMsg({ amount: refund, spotName: b.spot_name, type: "early" });
       setTimeout(() => setRefundMsg(null), 5000);
@@ -2303,13 +2320,17 @@ export default function App() {
     } else { setAuthChecked(true); }
   }, []);
 
-  // Load wallet balance whenever user logs in
+  // Load wallet balance from API whenever user logs in — localStorage is only a fast-display cache
   useEffect(() => {
     if (!user || user.role !== "driver") return;
     walletApi.get()
-      .then(d => setWalletBalance(d.balance || 0))
+      .then(d => {
+        const bal = d.balance || 0;
+        setWalletBalance(bal);
+        localStorage.setItem(`ps_wallet_${user.id}`, String(bal)); // sync cache
+      })
       .catch(() => {
-        // Wallet API not implemented yet — use localStorage as local store
+        // API failed — fall back to cached value so UI isn't jarring
         const saved = localStorage.getItem(`ps_wallet_${user.id}`);
         setWalletBalance(saved ? parseFloat(saved) : 0);
       });
