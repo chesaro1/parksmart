@@ -29,6 +29,9 @@ export const authApi = {
   login: (d) => api.post("/api/auth/login", d).then(r => r.data),
   me: () => api.get("/api/auth/me").then(r => r.data),
   update: (d) => api.put("/api/auth/me", d).then(r => r.data),
+  sendOtp: (d) => api.post("/api/auth/send-otp", d).then(r => r.data),
+  verifyOtp: (d) => api.post("/api/auth/verify-otp", d).then(r => r.data),
+  google: (d) => api.post("/api/auth/google", d).then(r => r.data),
 };
 export const spotsApi = {
   getAll: (p) => api.get("/api/spots", { params: p }).then(r => r.data),
