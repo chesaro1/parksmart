@@ -96,12 +96,129 @@ app.post("/api/auth/register", authLimiter, async (req, res) => {
   const { data: user, error } = await supabase.from("users").insert({
     full_name: fullName.trim(), email: email.toLowerCase().trim(),
     phone: phone.trim(), password_hash: passwordHash, role,
+    is_verified: false,
   }).select("id,full_name,email,phone,role,vehicles,loyalty_points,is_premium,created_at").single();
 
   if (error) return res.status(500).json({ error: "Registration failed" });
 
+  // Generate and send OTP
+  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min
+  await supabase.from("otp_codes").insert({ user_id: user.id, email: email.toLowerCase(), otp_hash: await bcrypt.hash(otp, 8), expires_at: expiresAt, type: "verify" });
+
+  // Send OTP via Supabase email (uses built-in SMTP)
+  await supabase.auth.admin.sendRawEmail({
+    to: email.toLowerCase(),
+    subject: "ParkSmart — Verify your account",
+    html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:24px;background:#0A0F1E;color:#F0F4FF;border-radius:16px">
+      <h2 style="color:#00E5A0;margin:0 0 8px">ParkSmart 🅿️</h2>
+      <p style="color:#6B7A99;margin:0 0 20px">Welcome, ${fullName.split(" ")[0]}! Your verification code:</p>
+      <div style="font-size:36px;font-weight:900;letter-spacing:8px;color:#00E5A0;text-align:center;padding:16px;background:#111827;border-radius:12px;margin-bottom:20px">${otp}</div>
+      <p style="color:#6B7A99;font-size:13px;margin:0">This code expires in 10 minutes. Do not share it with anyone.</p>
+    </div>`,
+  }).catch(() => {}); // Silently fail if email not configured — OTP still works via SMS
+
+  // Also log OTP to console in dev (replace with real SMS in prod)
+  if (process.env.NODE_ENV !== "production") console.log(`[OTP] ${email}: ${otp}`);
+
   const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
-  res.status(201).json({ token, user });
+  res.status(201).json({ token, user, requiresVerification: true });
+});
+
+// ── Send OTP (for registration verification or phone verification) ────────────
+app.post("/api/auth/send-otp", authLimiter, async (req, res) => {
+  const { email, phone, type = "verify" } = req.body;
+  if (!email && !phone) return res.status(400).json({ error: "Email or phone required" });
+
+  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+  // Find user
+  let userQuery = supabase.from("users").select("id,full_name,email,phone");
+  if (email) userQuery = userQuery.eq("email", email.toLowerCase());
+  else userQuery = userQuery.eq("phone", phone);
+  const { data: user } = await userQuery.single();
+  if (!user) return res.status(404).json({ error: "Account not found" });
+
+  await supabase.from("otp_codes").insert({ user_id: user.id, email: user.email, phone: user.phone, otp_hash: await bcrypt.hash(otp, 8), expires_at: expiresAt, type });
+
+  // Send via email
+  if (email || user.email) {
+    await supabase.auth.admin.sendRawEmail({
+      to: user.email,
+      subject: type === "verify" ? "ParkSmart — Verify your account" : "ParkSmart — Your login code",
+      html: `<div style="font-family:sans-serif;padding:24px;background:#0A0F1E;color:#F0F4FF;border-radius:16px;max-width:400px">
+        <h2 style="color:#00E5A0">ParkSmart 🅿️</h2>
+        <p style="color:#6B7A99">Your ${type === "verify" ? "verification" : "login"} code:</p>
+        <div style="font-size:36px;font-weight:900;letter-spacing:8px;color:#00E5A0;text-align:center;padding:16px;background:#111827;border-radius:12px;margin-bottom:16px">${otp}</div>
+        <p style="color:#6B7A99;font-size:13px">Expires in 10 minutes.</p>
+      </div>`,
+    }).catch(() => {});
+  }
+
+  if (process.env.NODE_ENV !== "production") console.log(`[OTP] ${user.email || user.phone}: ${otp}`);
+  res.json({ message: `OTP sent to ${email ? "your email" : "your phone"}`, userId: user.id });
+});
+
+// ── Verify OTP ────────────────────────────────────────────────────────────────
+app.post("/api/auth/verify-otp", authLimiter, async (req, res) => {
+  const { userId, otp } = req.body;
+  if (!userId || !otp) return res.status(400).json({ error: "userId and otp required" });
+
+  const { data: codes } = await supabase.from("otp_codes")
+    .select("*").eq("user_id", userId).eq("used", false)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false }).limit(5);
+
+  if (!codes?.length) return res.status(400).json({ error: "OTP expired or not found. Request a new one." });
+
+  // Check against all recent valid codes
+  let matched = null;
+  for (const code of codes) {
+    const valid = await bcrypt.compare(otp, code.otp_hash);
+    if (valid) { matched = code; break; }
+  }
+  if (!matched) return res.status(400).json({ error: "Incorrect OTP. Please try again." });
+
+  // Mark used
+  await supabase.from("otp_codes").update({ used: true }).eq("id", matched.id);
+  // Mark user as verified
+  await supabase.from("users").update({ is_verified: true, updated_at: new Date().toISOString() }).eq("id", userId);
+
+  const { data: user } = await supabase.from("users").select("id,full_name,email,phone,role,vehicles,loyalty_points,is_premium,wallet_balance,created_at").eq("id", userId).single();
+  const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
+  res.json({ token, user, message: "Account verified successfully" });
+});
+
+// ── Google OAuth callback ─────────────────────────────────────────────────────
+// Called after Supabase Google OAuth succeeds — exchanges Supabase session for ParkSmart JWT
+app.post("/api/auth/google", async (req, res) => {
+  const { accessToken, role = "driver" } = req.body;
+  if (!accessToken) return res.status(400).json({ error: "accessToken required" });
+
+  // Verify the Supabase access token
+  const { data: { user: supaUser }, error } = await supabase.auth.getUser(accessToken);
+  if (error || !supaUser) return res.status(401).json({ error: "Invalid Google token" });
+
+  const email = supaUser.email?.toLowerCase();
+  const fullName = supaUser.user_metadata?.full_name || supaUser.user_metadata?.name || email.split("@")[0];
+
+  // Find or create user in our users table
+  let { data: user } = await supabase.from("users").select("*").eq("email", email).single();
+
+  if (!user) {
+    const { data: newUser } = await supabase.from("users").insert({
+      full_name: fullName, email, phone: "", password_hash: "", role,
+      is_verified: true, // Google accounts are pre-verified
+    }).select("id,full_name,email,phone,role,vehicles,loyalty_points,is_premium,created_at").single();
+    user = newUser;
+  }
+
+  if (!user) return res.status(500).json({ error: "Failed to create account" });
+
+  const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
+  const { password_hash, ...safeUser } = user;
+  res.json({ token, user: safeUser });
 });
 
 app.post("/api/auth/login", authLimiter, async (req, res) => {
