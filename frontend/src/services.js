@@ -41,6 +41,7 @@ export const bookingsApi = {
 };
 export const paymentsApi = {
   stkPush: (d) => api.post("/api/payments/mpesa/stkpush", d).then(r => r.data),
+  overstay: (d) => api.post("/api/payments/overstay", d).then(r => r.data),
 };
 export const providerApi = {
   register: (d) => api.post("/api/provider/register", d).then(r => r.data),
