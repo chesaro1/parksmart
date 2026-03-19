@@ -204,12 +204,25 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
   const commission = Math.round(total * 0.20);
   const providerAmount = total - commission;
 
+  // FIX: Treat HH:MM as Nairobi time (UTC+3) regardless of server timezone.
+  // Render runs in UTC, so d.setHours() would interpret 09:30 as 09:30 UTC
+  // (= 12:30 EAT on the user's phone). We offset by +3 hours to get the
+  // correct UTC equivalent of the Nairobi local time the user entered.
+  const NAIROBI_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC+3
   const resolveTime = (hhMM) => {
     if (!hhMM) return null;
+    // If it's already a full ISO string, use it directly
+    if (hhMM.includes("T") || hhMM.includes("Z")) return new Date(hhMM).toISOString();
     const [h, m] = hhMM.split(":").map(Number);
-    const d = new Date();
-    d.setHours(h, m, 0, 0);
-    if (d.getTime() < Date.now() - 60000) d.setDate(d.getDate() + 1);
+    // Build today's date in UTC, then subtract 3h to get UTC equivalent of EAT time
+    const now = new Date();
+    // Start of today in Nairobi: midnight EAT = 21:00 UTC previous day
+    const todayNairobiMidnightUTC = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - NAIROBI_OFFSET_MS
+    );
+    const d = new Date(todayNairobiMidnightUTC.getTime() + h * 3600000 + m * 60000);
+    // If that time is more than 1 min in the past, push to tomorrow
+    if (d.getTime() < Date.now() - 60000) d.setUTCDate(d.getUTCDate() + 1);
     return d.toISOString();
   };
 
