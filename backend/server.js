@@ -390,7 +390,82 @@ app.post("/api/payments/mpesa/stkpush", requireAuth, authLimiter, async (req, re
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PROVIDER ROUTES
+// WALLET ROUTES — persisted in users.wallet_balance column
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/wallet — returns current balance
+app.get("/api/wallet", requireAuth, async (req, res) => {
+  const { data: user } = await supabase
+    .from("users")
+    .select("wallet_balance")
+    .eq("id", req.user.userId)
+    .single();
+  res.json({ balance: user?.wallet_balance || 0 });
+});
+
+// POST /api/wallet/topup — add funds (from M-Pesa or manual)
+app.post("/api/wallet/topup", requireAuth, async (req, res) => {
+  const { amount } = req.body;
+  if (!amount || isNaN(amount) || Number(amount) <= 0)
+    return res.status(400).json({ error: "Valid amount required" });
+
+  const { data: user } = await supabase
+    .from("users").select("wallet_balance").eq("id", req.user.userId).single();
+  const current = user?.wallet_balance || 0;
+  const newBalance = current + Math.round(Number(amount));
+
+  const { data: updated } = await supabase
+    .from("users")
+    .update({ wallet_balance: newBalance, updated_at: new Date().toISOString() })
+    .eq("id", req.user.userId)
+    .select("wallet_balance").single();
+
+  res.json({ balance: updated?.wallet_balance || newBalance, message: "Wallet topped up" });
+});
+
+// POST /api/wallet/deduct — deduct funds for a booking payment
+app.post("/api/wallet/deduct", requireAuth, async (req, res) => {
+  const { amount } = req.body;
+  if (!amount || isNaN(amount) || Number(amount) <= 0)
+    return res.status(400).json({ error: "Valid amount required" });
+
+  const { data: user } = await supabase
+    .from("users").select("wallet_balance").eq("id", req.user.userId).single();
+  const current = user?.wallet_balance || 0;
+  const deduction = Math.round(Number(amount));
+
+  if (current < deduction)
+    return res.status(400).json({ error: "Insufficient wallet balance" });
+
+  const newBalance = current - deduction;
+  const { data: updated } = await supabase
+    .from("users")
+    .update({ wallet_balance: newBalance, updated_at: new Date().toISOString() })
+    .eq("id", req.user.userId)
+    .select("wallet_balance").single();
+
+  res.json({ balance: updated?.wallet_balance ?? newBalance, message: "Payment deducted from wallet" });
+});
+
+// POST /api/wallet/refund — refund funds back to wallet (on cancellation / early exit)
+app.post("/api/wallet/refund", requireAuth, async (req, res) => {
+  const { amount } = req.body;
+  if (!amount || isNaN(amount) || Number(amount) < 0)
+    return res.status(400).json({ error: "Valid amount required" });
+
+  const { data: user } = await supabase
+    .from("users").select("wallet_balance").eq("id", req.user.userId).single();
+  const current = user?.wallet_balance || 0;
+  const newBalance = current + Math.round(Number(amount));
+
+  const { data: updated } = await supabase
+    .from("users")
+    .update({ wallet_balance: newBalance, updated_at: new Date().toISOString() })
+    .eq("id", req.user.userId)
+    .select("wallet_balance").single();
+
+  res.json({ balance: updated?.wallet_balance || newBalance, message: "Refund added to wallet" });
+});
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Register as provider (save business details)
