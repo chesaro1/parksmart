@@ -573,6 +573,18 @@ function SpotNumberPicker({ total, available, selected, onSelect, takenSpots = [
     </div>
   );
 }
+// Convert a local HH:MM string to a full ISO timestamp in Nairobi time.
+// This ensures the server always receives an unambiguous UTC time, never a bare HH:MM.
+function toNairobiISO(hhMM) {
+  const [h, m] = hhMM.split(":").map(Number);
+  const now = new Date();
+  // Build the date using local browser time (which is EAT on Nairobi devices)
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0, 0);
+  // If the resulting time is more than 1 min in the past, push to tomorrow
+  if (d.getTime() < Date.now() - 60000) d.setDate(d.getDate() + 1);
+  return d.toISOString(); // Browser converts local → UTC correctly
+}
+
 function getNowTime() {
   const now = new Date();
   return `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
@@ -643,8 +655,10 @@ function BookingModal({ spot, user, onClose, onSuccess, walletBalance, onWalletC
       onWalletChange(prev => Math.max(0, prev - total));
       // Create booking (no STK since wallet covered it)
       const { booking } = await bookingsApi.create({
-        spotId: spot.id, hours: parseFloat(hours.toFixed(2)),
-        vehiclePlate: plate.trim(), startTime, endTime,
+        spotId: spot.id, hours: parseFloat(hours.toFixed(4)),
+        vehiclePlate: plate.trim(),
+        arriveAt: toNairobiISO(startTime),  // full ISO — no timezone ambiguity
+        endTime: toNairobiISO(endTime),
         spotNumber, paymentMethod: "wallet"
       });
       setTimeout(() => onSuccess({ ...booking, startTime, endTime, spot_lat: spot.lat, spot_lng: spot.lng, spotNumber }), 1000);
@@ -659,7 +673,7 @@ function BookingModal({ spot, user, onClose, onSuccess, walletBalance, onWalletC
     if (!phone.trim()) return setError("Enter your M-Pesa number");
     setError(""); setStep("paying");
     try {
-      const { booking } = await bookingsApi.create({ spotId: spot.id, hours: parseFloat(hours.toFixed(2)), vehiclePlate: plate.trim(), startTime, endTime, spotNumber });
+      const { booking } = await bookingsApi.create({ spotId: spot.id, hours: parseFloat(hours.toFixed(4)), vehiclePlate: plate.trim(), arriveAt: toNairobiISO(startTime), endTime: toNairobiISO(endTime), spotNumber });
       await paymentsApi.stkPush({ phone: phone.trim(), amount: booking.total_amount, bookingId: booking.id });
       setTimeout(() => onSuccess({ ...booking, startTime, endTime, spot_lat: spot.lat, spot_lng: spot.lng, spotNumber }), 3500);
     } catch(e) {
