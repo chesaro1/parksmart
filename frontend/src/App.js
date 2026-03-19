@@ -1353,11 +1353,63 @@ function CountdownTimer({ booking }) {
     );
   }
 
-  // ── ENDED ─────────────────────────────────────────────────────────────────
+  // ── ENDED: Overtime countdown ──────────────────────────────────────────────
+  const overstayMs = now - endMs;
+  const overstayMins = Math.ceil(overstayMs / 60000);
+  const ratePerMin = (booking.total_amount || 0) / (booking.hours || 1) / 60;
+  const overstayCharge = Math.ceil(overstayMins * ratePerMin);
+  const os = Math.floor(overstayMs / 1000);
+  const osH = Math.floor(os / 3600);
+  const osM = Math.floor((os % 3600) / 60);
+  const osS = os % 60;
+
   return (
-    <div style={{ background:`${C.danger}10`, border:`1.5px solid ${C.danger}30`, borderRadius:12, padding:"12px 14px", marginTop:8, textAlign:"center" }}>
-      <div style={{ fontSize:13, fontWeight:800, color:C.danger, marginBottom:4 }}>Session Ended</div>
-      <div style={{ fontSize:11, color:C.muted }}>Drive to the exit gate — barrier will open for your plate</div>
+    <div style={{ background:`${C.danger}10`, border:`1.5px solid ${C.danger}50`, borderRadius:14, padding:"14px", marginTop:8 }}>
+      {/* Header */}
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+        <div style={{ width:34, height:34, borderRadius:10, background:`${C.danger}20`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+          <Icon name="alert-triangle" size={18} color={C.danger} strokeWidth={2.5}/>
+        </div>
+        <div>
+          <div style={{ fontSize:13, fontWeight:800, color:C.danger }}>Session Expired — Overstay</div>
+          <div style={{ fontSize:10, color:C.muted }}>Your booked time ended at {new Date(endMs).toLocaleTimeString("en-KE",{hour:"2-digit",minute:"2-digit"})}</div>
+        </div>
+        <div style={{ marginLeft:"auto", background:`${C.danger}20`, borderRadius:20, padding:"3px 10px", fontSize:9, fontWeight:800, color:C.danger, letterSpacing:0.5 }}>
+          OVERTIME
+        </div>
+      </div>
+
+      {/* Overtime clock */}
+      <div style={{ textAlign:"center", background:`${C.danger}08`, borderRadius:10, padding:"10px", marginBottom:10, border:`1px solid ${C.danger}20` }}>
+        <div style={{ fontSize:10, color:C.muted, marginBottom:4, fontWeight:600 }}>OVERTIME DURATION</div>
+        <div style={{ display:"flex", alignItems:"baseline", justifyContent:"center", gap:4 }}>
+          {osH > 0 && <>
+            <span style={{ fontSize:36, fontWeight:900, color:C.danger, lineHeight:1 }}>{osH}</span>
+            <span style={{ fontSize:12, color:C.muted, fontWeight:600, marginRight:4 }}>hr</span>
+          </>}
+          <span style={{ fontSize:36, fontWeight:900, color:C.danger, lineHeight:1 }}>{pad(osM)}</span>
+          <span style={{ fontSize:12, color:C.muted, fontWeight:600 }}>min</span>
+          <span style={{ fontSize:36, fontWeight:900, color:C.danger, lineHeight:1 }}>{pad(osS)}</span>
+          <span style={{ fontSize:12, color:C.muted, fontWeight:600 }}>sec</span>
+        </div>
+      </div>
+
+      {/* Overstay charge */}
+      <div style={{ background:`${C.danger}15`, borderRadius:10, padding:"10px 12px", marginBottom:10, border:`1px solid ${C.danger}30`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+        <div>
+          <div style={{ fontSize:10, color:C.muted, fontWeight:600 }}>OVERSTAY CHARGE</div>
+          <div style={{ fontSize:11, color:C.muted, marginTop:1 }}>KES {Math.round(ratePerMin * 60)}/hr · {overstayMins} min</div>
+        </div>
+        <div style={{ fontSize:22, fontWeight:900, color:C.danger }}>KES {overstayCharge.toLocaleString()}</div>
+      </div>
+
+      {/* Gate instruction */}
+      <div style={{ background:`${C.warn}10`, border:`1px solid ${C.warn}30`, borderRadius:9, padding:"9px 11px", display:"flex", alignItems:"center", gap:7 }}>
+        <Icon name="zap" size={14} color={C.warn} strokeWidth={2.5}/>
+        <div style={{ fontSize:11, color:C.warn, fontWeight:700, lineHeight:1.5 }}>
+          Drive to exit gate — scan your plate to pay KES {overstayCharge.toLocaleString()} &amp; exit
+        </div>
+      </div>
     </div>
   );
 }
@@ -2289,6 +2341,42 @@ function AdminPortal({ onLogout }) {
   );
 }
 
+// ─── OVERSTAY PAY BUTTON ──────────────────────────────────────────────────────
+function OverstayPayButton({ overstayPayment, onPaid, C }) {
+  const [loading, setLoading] = useState(false);
+  const [phone, setPhone] = useState(overstayPayment.phone || "");
+  const [sent, setSent] = useState(false);
+  const [err, setErr] = useState("");
+
+  const resend = async () => {
+    if (!phone.trim()) return setErr("Enter your M-Pesa number");
+    setErr(""); setLoading(true);
+    try {
+      await paymentsApi.overstay({ overstayId: overstayPayment.overstayId, phone: phone.trim() });
+      setSent(true);
+    } catch(e) {
+      setErr(e.response?.data?.error || "Failed to send. Try again.");
+    } finally { setLoading(false); }
+  };
+
+  if (sent) return (
+    <div style={{textAlign:"center",padding:"12px",background:`${C.accent}10`,borderRadius:12,border:`1px solid ${C.accent}30`}}>
+      <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:4}}>✓ STK Push sent!</div>
+      <div style={{fontSize:11,color:C.muted}}>Check your phone and enter your PIN. Gate opens automatically.</div>
+    </div>
+  );
+
+  return (
+    <div>
+      {err && <div style={{color:C.danger,fontSize:12,marginBottom:8,display:"flex",alignItems:"center",gap:5}}><Icon name="alert-triangle" size={12} color={C.danger}/>{err}</div>}
+      <ValidatedInput label="M-Pesa Number" name="mpesaPhone" value={phone} onChange={e=>setPhone(e.target.value)} placeholder="+254 712 345 678" type="tel"/>
+      <Btn loading={loading} onClick={resend} variant="primary">
+        Resend M-Pesa Request · KES {(overstayPayment.charge||0).toLocaleString()}
+      </Btn>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [isDark, setIsDark] = useState(() => {
@@ -2310,6 +2398,8 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [spotsLoading, setSpotsLoading] = useState(true);
   const [walletBalance, setWalletBalance] = useState(0);
+  const [overstayNotice, setOverstayNotice] = useState(null);   // { minutes, charge, spotName, plate, bookingId }
+  const [overstayPayment, setOverstayPayment] = useState(null); // { overstayId, minutes, charge, spotName, plate, phone, message }
 
   useEffect(() => {
     const token = localStorage.getItem("ps_token");
@@ -2362,10 +2452,30 @@ export default function App() {
         : s
       ));
     };
+    // Overstay alerts from gate scanner
+    const onOverstayAlert = (data) => {
+      setOverstayNotice(data); // show modal — user's time is up
+    };
+    const onOverstayPaymentRequired = (data) => {
+      setOverstayPayment(data); // show payment modal — STK push already sent
+    };
+    const onOverstayPaid = (data) => {
+      setOverstayPayment(null);
+      setOverstayNotice(null);
+      // Refresh bookings to show completed status
+    };
+    const onOverstayCharged = (data) => {
+      setWalletBalance(data.newWalletBalance || 0);
+      localStorage.setItem(`ps_wallet_${user.id}`, String(data.newWalletBalance || 0));
+    };
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.on("spots:snapshot", onSnapshot);
     socket.on("spot:updated", onSpotUpdated);
+    socket.on("overstay:alert", onOverstayAlert);
+    socket.on("overstay:payment_required", onOverstayPaymentRequired);
+    socket.on("overstay:paid", onOverstayPaid);
+    socket.on("overstay:charged", onOverstayCharged);
     // Join immediately (socket may already be connected)
     if (socket.connected) onConnect();
     return () => {
@@ -2374,6 +2484,10 @@ export default function App() {
       socket.off("disconnect", onDisconnect);
       socket.off("spots:snapshot", onSnapshot);
       socket.off("spot:updated", onSpotUpdated);
+      socket.off("overstay:alert", onOverstayAlert);
+      socket.off("overstay:payment_required", onOverstayPaymentRequired);
+      socket.off("overstay:paid", onOverstayPaid);
+      socket.off("overstay:charged", onOverstayCharged);
     };
   }, [user]);
 
@@ -2456,6 +2570,79 @@ export default function App() {
           </div>
         </div>
       </div>
+        {/* ── Overstay Notice Modal (time expired, drive to gate) ── */}
+        {overstayNotice && (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:999,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+            <div style={{background:C.card,borderRadius:24,padding:"26px 22px",width:"100%",maxWidth:360,border:`2px solid ${C.danger}`,boxShadow:`0 0 40px ${C.danger}40`}}>
+              <div style={{textAlign:"center",marginBottom:18}}>
+                <div style={{width:60,height:60,borderRadius:"50%",background:`${C.danger}20`,border:`2px solid ${C.danger}`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}>
+                  <Icon name="alert-triangle" size={28} color={C.danger} strokeWidth={2.5}/>
+                </div>
+                <div style={{fontSize:18,fontWeight:900,color:C.danger}}>Overstay Detected!</div>
+                <div style={{fontSize:13,color:C.muted,marginTop:4}}>{overstayNotice.spotName}</div>
+              </div>
+              <div style={{background:`${C.danger}10`,borderRadius:14,padding:"14px",marginBottom:16,border:`1px solid ${C.danger}30`}}>
+                {[
+                  ["Plate", overstayNotice.plate],
+                  ["Overstay Duration", `${overstayNotice.minutes} minutes`],
+                  ["Overstay Charge", `KES ${(overstayNotice.charge||0).toLocaleString()}`],
+                ].map(([k,v]) => (
+                  <div key={k} style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                    <span style={{fontSize:12,color:C.muted}}>{k}</span>
+                    <span style={{fontSize:13,fontWeight:800,color:k==="Overstay Charge"?C.danger:C.text}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{background:`${C.warn}10`,border:`1px solid ${C.warn}30`,borderRadius:12,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.warn,fontWeight:600,lineHeight:1.6,display:"flex",gap:8,alignItems:"flex-start"}}>
+                <Icon name="zap" size={16} color={C.warn} strokeWidth={2.5} style={{marginTop:1,flexShrink:0}}/>
+                Drive to the exit gate and scan your plate. An M-Pesa request will be sent to your phone automatically.
+              </div>
+              <Btn onClick={() => setOverstayNotice(null)}>Got it — heading to exit</Btn>
+            </div>
+          </div>
+        )}
+
+        {/* ── Overstay Payment Modal (STK push sent, waiting for payment) ── */}
+        {overstayPayment && (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+            <div style={{background:C.card,borderRadius:24,padding:"26px 22px",width:"100%",maxWidth:360,border:`2px solid ${C.warn}`,boxShadow:`0 0 40px ${C.warn}30`}}>
+              <div style={{textAlign:"center",marginBottom:18}}>
+                <div style={{width:60,height:60,borderRadius:"50%",background:`${C.warn}20`,border:`2px solid ${C.warn}`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}>
+                  <Icon name="phone" size={28} color={C.warn} strokeWidth={2.5}/>
+                </div>
+                <div style={{fontSize:18,fontWeight:900,color:C.warn}}>M-Pesa Payment Required</div>
+                <div style={{fontSize:12,color:C.muted,marginTop:4}}>Gate is closed until payment is confirmed</div>
+              </div>
+
+              <div style={{background:C.inputBg,borderRadius:14,padding:"14px",marginBottom:14,border:`1px solid ${C.border}`}}>
+                {[
+                  ["Location", overstayPayment.spotName],
+                  ["Plate", overstayPayment.plate],
+                  ["Overstay", `${overstayPayment.minutes} minutes`],
+                  ["Amount Due", `KES ${(overstayPayment.charge||0).toLocaleString()}`],
+                  ["Sending to", overstayPayment.phone],
+                ].map(([k,v]) => (
+                  <div key={k} style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                    <span style={{fontSize:12,color:C.muted}}>{k}</span>
+                    <span style={{fontSize:13,fontWeight:800,color:k==="Amount Due"?C.danger:C.text}}>{v}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Pulsing waiting indicator */}
+              <div style={{background:`${C.warn}10`,border:`1px solid ${C.warn}30`,borderRadius:12,padding:"14px",marginBottom:16,display:"flex",alignItems:"center",gap:11}}>
+                <div className="spin" style={{width:22,height:22,borderRadius:"50%",border:`3px solid ${C.warn}30`,borderTop:`3px solid ${C.warn}`,flexShrink:0}}/>
+                <div>
+                  <div style={{fontSize:13,fontWeight:700,color:C.warn}}>Check your phone</div>
+                  <div style={{fontSize:11,color:C.muted,marginTop:2}}>Enter your M-Pesa PIN to pay KES {(overstayPayment.charge||0).toLocaleString()} — gate opens automatically</div>
+                </div>
+              </div>
+
+              {/* Manual resend */}
+              <OverstayPayButton overstayPayment={overstayPayment} onPaid={() => setOverstayPayment(null)} C={C}/>
+            </div>
+          </div>
+        )}
     </ThemeCtx.Provider>
   );
 }
