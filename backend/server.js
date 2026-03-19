@@ -15,6 +15,53 @@ const app = express();
 const server = http.createServer(app);
 const JWT_SECRET = process.env.JWT_SECRET || "parksmart-secret-2024";
 
+// ─── Email helper — uses Resend API (free, no npm package needed) ─────────────
+async function sendOtpEmail(to, otp, firstName = "") {
+  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  if (!RESEND_API_KEY) {
+    console.log(`[OTP EMAIL SKIPPED — set RESEND_API_KEY in env] ${to} → ${otp}`);
+    return;
+  }
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: process.env.EMAIL_FROM || "ParkSmart <noreply@parksmart.co.ke>",
+        to: [to],
+        subject: "ParkSmart — Your verification code",
+        html: `
+          <div style="font-family:'Segoe UI',sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0A0F1E;border-radius:20px">
+            <div style="text-align:center;margin-bottom:28px">
+              <div style="display:inline-block;background:linear-gradient(135deg,#00E5A0,#4DA6FF);border-radius:16px;padding:14px 20px;margin-bottom:12px">
+                <span style="font-size:32px">🅿️</span>
+              </div>
+              <h1 style="color:#F0F4FF;margin:0;font-size:24px;font-weight:800">ParkSmart</h1>
+              <p style="color:#6B7A99;margin:6px 0 0;font-size:14px">Smart Parking · Nairobi</p>
+            </div>
+            <p style="color:#F0F4FF;font-size:16px;margin:0 0 6px">Hi${firstName ? " " + firstName : ""}! 👋</p>
+            <p style="color:#6B7A99;font-size:14px;margin:0 0 24px">Your verification code is below. It expires in <strong style="color:#F0F4FF">10 minutes</strong>.</p>
+            <div style="background:#111827;border:2px solid #00E5A040;border-radius:16px;padding:28px;text-align:center;margin-bottom:24px">
+              <div style="font-size:48px;font-weight:900;letter-spacing:14px;color:#00E5A0;font-family:monospace">${otp}</div>
+            </div>
+            <div style="background:#1E2D3D;border-radius:12px;padding:14px 16px;margin-bottom:24px;display:flex;align-items:center;gap:10px">
+              <span style="font-size:18px">🔒</span>
+              <p style="color:#6B7A99;font-size:12px;margin:0">Never share this code with anyone. ParkSmart staff will never ask for it.</p>
+            </div>
+            <p style="color:#3A4A5C;font-size:12px;text-align:center;margin:0">If you didn't register on ParkSmart, you can safely ignore this email.</p>
+          </div>
+        `,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`[Email] Resend error:`, err);
+    }
+  } catch(e) {
+    console.error(`[Email] Failed to send OTP email:`, e.message);
+  }
+}
+
 // ─── Supabase ─────────────────────────────────────────────────────────────────
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -101,25 +148,16 @@ app.post("/api/auth/register", authLimiter, async (req, res) => {
 
   if (error) return res.status(500).json({ error: "Registration failed" });
 
-  // Generate and send OTP
+  // Generate and store OTP
   const otp = String(Math.floor(100000 + Math.random() * 900000));
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
   await supabase.from("otp_codes").insert({ user_id: user.id, email: email.toLowerCase(), otp_hash: await bcrypt.hash(otp, 8), expires_at: expiresAt, type: "verify" });
 
-  // Send OTP via Supabase email (uses built-in SMTP)
-  await supabase.auth.admin.sendRawEmail({
-    to: email.toLowerCase(),
-    subject: "ParkSmart — Verify your account",
-    html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:24px;background:#0A0F1E;color:#F0F4FF;border-radius:16px">
-      <h2 style="color:#00E5A0;margin:0 0 8px">ParkSmart 🅿️</h2>
-      <p style="color:#6B7A99;margin:0 0 20px">Welcome, ${fullName.split(" ")[0]}! Your verification code:</p>
-      <div style="font-size:36px;font-weight:900;letter-spacing:8px;color:#00E5A0;text-align:center;padding:16px;background:#111827;border-radius:12px;margin-bottom:20px">${otp}</div>
-      <p style="color:#6B7A99;font-size:13px;margin:0">This code expires in 10 minutes. Do not share it with anyone.</p>
-    </div>`,
-  }).catch(() => {}); // Silently fail if email not configured — OTP still works via SMS
+  // Send OTP email via configured SMTP (Resend / Gmail / any SMTP)
+  await sendOtpEmail(email.toLowerCase(), otp, fullName.split(" ")[0]);
 
-  // Also log OTP to console in dev (replace with real SMS in prod)
-  if (process.env.NODE_ENV !== "production") console.log(`[OTP] ${email}: ${otp}`);
+  // Always log to Render console so you can test even before SMTP is set up
+  console.log(`[OTP] ${email} → ${otp}`);
 
   const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: "7d" });
   res.status(201).json({ token, user, requiresVerification: true });
@@ -144,19 +182,10 @@ app.post("/api/auth/send-otp", authLimiter, async (req, res) => {
 
   // Send via email
   if (email || user.email) {
-    await supabase.auth.admin.sendRawEmail({
-      to: user.email,
-      subject: type === "verify" ? "ParkSmart — Verify your account" : "ParkSmart — Your login code",
-      html: `<div style="font-family:sans-serif;padding:24px;background:#0A0F1E;color:#F0F4FF;border-radius:16px;max-width:400px">
-        <h2 style="color:#00E5A0">ParkSmart 🅿️</h2>
-        <p style="color:#6B7A99">Your ${type === "verify" ? "verification" : "login"} code:</p>
-        <div style="font-size:36px;font-weight:900;letter-spacing:8px;color:#00E5A0;text-align:center;padding:16px;background:#111827;border-radius:12px;margin-bottom:16px">${otp}</div>
-        <p style="color:#6B7A99;font-size:13px">Expires in 10 minutes.</p>
-      </div>`,
-    }).catch(() => {});
+    await sendOtpEmail(user.email, otp, user.full_name?.split(" ")[0] || "");
   }
 
-  if (process.env.NODE_ENV !== "production") console.log(`[OTP] ${user.email || user.phone}: ${otp}`);
+  console.log(`[OTP] ${user.email || user.phone}: ${otp}`);
   res.json({ message: `OTP sent to ${email ? "your email" : "your phone"}`, userId: user.id });
 });
 
