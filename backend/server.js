@@ -168,6 +168,22 @@ app.get("/api/spots/:id", async (req, res) => {
   res.json(spot);
 });
 
+// Returns the specific spot numbers currently taken at a location (active confirmed bookings)
+app.get("/api/spots/:id/taken", async (req, res) => {
+  const now = new Date().toISOString();
+  const { data: bookings } = await supabase
+    .from("bookings")
+    .select("spot_number, arrive_at, expires_at")
+    .eq("spot_id", req.params.id)
+    .eq("status", "confirmed")
+    .not("spot_number", "is", null)
+    .gt("expires_at", now); // only bookings that haven't expired yet
+  const takenSpots = (bookings || [])
+    .map(b => b.spot_number)
+    .filter(Boolean);
+  res.json({ taken: takenSpots });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // BOOKINGS ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -196,6 +212,28 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
 
   if (claimErr || !claimed) {
     return res.status(409).json({ error: "This spot was just taken by someone else. Please refresh and try again." });
+  }
+
+  // ── FIX: Validate specific spot number isn't already booked ─────────────────
+  if (spotNumber) {
+    const now = new Date().toISOString();
+    const { data: conflicting } = await supabase
+      .from("bookings")
+      .select("id")
+      .eq("spot_id", spotId)
+      .eq("spot_number", spotNumber)
+      .eq("status", "confirmed")
+      .gt("expires_at", now)
+      .limit(1)
+      .single();
+
+    if (conflicting) {
+      // Rollback the space we just claimed since we can't use it
+      await supabase.from("spots")
+        .update({ available_spaces: spot.available_spaces, updated_at: new Date().toISOString() })
+        .eq("id", spotId);
+      return res.status(409).json({ error: `Spot #${spotNumber} was just booked by someone else. Please pick a different spot.` });
+    }
   }
 
   // ── FIX 1: Use parseFloat (not parseInt) so 1.5hr stays 1.5hr ───────────────
