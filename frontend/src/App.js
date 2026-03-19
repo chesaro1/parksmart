@@ -174,29 +174,160 @@ const timeAgo = (d) => {
 // ─── AUTH SCREEN ──────────────────────────────────────────────────────────────
 function AuthScreen({ onAuth }) {
   const C = useTheme();
-  const [mode, setMode] = useState("login");
+  const [mode, setMode] = useState("login");       // login | register | otp | forgot
   const [role, setRole] = useState("driver");
   const [form, setForm] = useState({ fullName:"", email:"", phone:"", password:"" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [otpState, setOtpState] = useState(null);  // { userId, via: 'email'|'phone', contact }
+  const [otp, setOtp] = useState("");
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const set = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  // Cooldown timer for resend
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown(c => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
 
   const submit = async () => {
     setError(""); setLoading(true);
     try {
-      const data = mode==="login"
-        ? await authApi.login({ email:form.email, password:form.password })
-        : await authApi.register({ ...form, role });
-      localStorage.setItem("ps_token", data.token);
-      onAuth(data.user);
+      if (mode === "login") {
+        const data = await authApi.login({ email:form.email, password:form.password });
+        localStorage.setItem("ps_token", data.token);
+        onAuth(data.user);
+      } else {
+        const data = await authApi.register({ ...form, role });
+        localStorage.setItem("ps_token", data.token);
+        if (data.requiresVerification) {
+          setOtpState({ userId: data.user.id, via: "email", contact: form.email });
+          setMode("otp");
+        } else {
+          onAuth(data.user);
+        }
+      }
     } catch(e) {
       setError(e.response?.data?.error || "Something went wrong. Check your connection.");
     } finally { setLoading(false); }
   };
 
+  const verifyOtp = async () => {
+    if (otp.length !== 6) return setError("Enter the 6-digit code");
+    setError(""); setOtpLoading(true);
+    try {
+      const data = await authApi.verifyOtp({ userId: otpState.userId, otp });
+      localStorage.setItem("ps_token", data.token);
+      onAuth(data.user);
+    } catch(e) {
+      setError(e.response?.data?.error || "Invalid code. Try again.");
+    } finally { setOtpLoading(false); }
+  };
+
+  const resendOtp = async () => {
+    if (resendCooldown > 0) return;
+    setError("");
+    try {
+      await authApi.sendOtp({ email: otpState.via === "email" ? otpState.contact : undefined, phone: otpState.via === "phone" ? otpState.contact : undefined });
+      setResendCooldown(60);
+    } catch(e) { setError("Failed to resend. Try again."); }
+  };
+
+  const loginWithGoogle = async () => {
+    setError(""); setLoading(true);
+    try {
+      // Use Supabase client-side Google OAuth
+      const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+      const sb = createClient(
+        process.env.REACT_APP_SUPABASE_URL || "https://cafyiswlagzksbxtiolx.supabase.co",
+        process.env.REACT_APP_SUPABASE_ANON_KEY || ""
+      );
+      const { data, error: oauthError } = await sb.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin + "?oauth=google" }
+      });
+      if (oauthError) throw oauthError;
+      // OAuth redirects — handle on return in useEffect below
+    } catch(e) {
+      setError("Google sign-in failed. Try email instead.");
+      setLoading(false);
+    }
+  };
+
+  // Handle Google OAuth return
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("oauth") !== "google") return;
+    const hash = window.location.hash;
+    const hashParams = new URLSearchParams(hash.replace("#",""));
+    const accessToken = hashParams.get("access_token");
+    if (!accessToken) return;
+    window.history.replaceState({}, "", window.location.pathname);
+    authApi.google({ accessToken, role: "driver" }).then(data => {
+      localStorage.setItem("ps_token", data.token);
+      onAuth(data.user);
+    }).catch(() => setError("Google sign-in failed. Try email instead."));
+  }, []);
+
+  // ── OTP Screen ───────────────────────────────────────────────────────────────
+  if (mode === "otp") return (
+    <div style={{height:"100%",overflowY:"auto",padding:"32px 24px 36px",boxSizing:"border-box"}}>
+      <button onClick={()=>{ setMode("register"); setOtp(""); setError(""); }} style={{background:"none",border:"none",color:C.muted,fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:5,marginBottom:24,padding:0}}>
+        <Icon name="x" size={14} color={C.muted} strokeWidth={2.5}/>Back
+      </button>
+      <div style={{textAlign:"center",marginBottom:32}}>
+        <div style={{width:64,height:64,borderRadius:20,background:`linear-gradient(135deg,${C.accent},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}>
+          <Icon name="shield-check" size={30} color="#fff" strokeWidth={2}/>
+        </div>
+        <div style={{fontSize:22,fontWeight:800,color:C.text}}>Verify your account</div>
+        <div style={{fontSize:13,color:C.muted,marginTop:6,lineHeight:1.6}}>
+          We sent a 6-digit code to<br/>
+          <span style={{color:C.accent,fontWeight:700}}>{otpState?.contact}</span>
+        </div>
+      </div>
+
+      {/* OTP digit input */}
+      <div style={{marginBottom:20}}>
+        <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:10,textAlign:"center"}}>Enter Verification Code</div>
+        <input
+          value={otp} onChange={e=>{ setOtp(e.target.value.replace(/\D/g,"").slice(0,6)); setError(""); }}
+          placeholder="• • • • • •" maxLength={6} inputMode="numeric"
+          style={{width:"100%",background:C.inputBg,border:`2px solid ${otp.length===6?C.accent:C.border}`,borderRadius:14,padding:"18px",fontSize:28,fontWeight:900,color:C.accent,outline:"none",fontFamily:"monospace",boxSizing:"border-box",textAlign:"center",letterSpacing:12,transition:"border-color 0.2s"}}
+        />
+      </div>
+
+      {error && (
+        <div style={{color:C.danger,fontSize:13,marginBottom:14,padding:"11px 13px",background:`${C.danger}12`,borderRadius:9,border:`1px solid ${C.danger}30`,display:"flex",alignItems:"center",gap:8}}>
+          <Icon name="alert-triangle" size={15} color={C.danger}/>{error}
+        </div>
+      )}
+
+      <Btn loading={otpLoading} onClick={verifyOtp}>Verify Account</Btn>
+
+      <div style={{textAlign:"center",marginTop:18}}>
+        <div style={{fontSize:13,color:C.muted,marginBottom:8}}>Didn't receive the code?</div>
+        <button onClick={resendOtp} disabled={resendCooldown>0} style={{background:"none",border:"none",color:resendCooldown>0?C.muted:C.accent,fontSize:13,fontWeight:700,cursor:resendCooldown>0?"default":"pointer"}}>
+          {resendCooldown>0 ? `Resend in ${resendCooldown}s` : "Resend Code"}
+        </button>
+      </div>
+
+      {/* Switch between email/phone */}
+      {form.phone && (
+        <div style={{textAlign:"center",marginTop:12}}>
+          <button onClick={async ()=>{ const via = otpState.via==="email"?"phone":"email"; const contact = via==="email"?form.email:form.phone; await authApi.sendOtp({ [via==="email"?"email":"phone"]: contact }); setOtpState(s=>({...s,via,contact})); setResendCooldown(60); }} style={{background:"none",border:"none",color:C.blue,fontSize:12,cursor:"pointer"}}>
+            Send to {otpState?.via==="email" ? `phone (${form.phone})` : `email (${form.email})`} instead
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  // ── Login / Register Screen ───────────────────────────────────────────────────
   return (
     <div style={{height:"100%",overflowY:"auto",padding:"32px 24px 36px",boxSizing:"border-box"}}>
-      <div style={{textAlign:"center",marginBottom:32}}>
+      <div style={{textAlign:"center",marginBottom:28}}>
         <div style={{width:64,height:64,borderRadius:20,background:`linear-gradient(135deg,${C.accent},${C.blue})`,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}>
           <Icon name="parking" size={32} color="#fff" strokeWidth={2}/>
         </div>
@@ -204,13 +335,27 @@ function AuthScreen({ onAuth }) {
         <div style={{fontSize:13,color:C.muted,marginTop:4}}>Smart Parking · Real Time · M-Pesa</div>
       </div>
 
-      <div style={{display:"flex",background:C.inputBg,borderRadius:12,padding:4,marginBottom:22,border:`1px solid ${C.border}`}}>
+      {/* Tab switcher */}
+      <div style={{display:"flex",background:C.inputBg,borderRadius:12,padding:4,marginBottom:20,border:`1px solid ${C.border}`}}>
         {[["login","Sign In"],["register","Register"]].map(([m,l])=>(
-          <button key={m} onClick={()=>{setMode(m);setError("");}} style={{flex:1,padding:"11px",borderRadius:9,border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:mode===m?C.accent:"transparent",color:mode===m?(C.mode==="dark"?"#0A0F1E":"#fff"):C.muted,transition:"all 0.15s"}}>{l}</button>
+          <button key={m} onClick={()=>{ setMode(m); setError(""); }} style={{flex:1,padding:"11px",borderRadius:9,border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:mode===m?C.accent:"transparent",color:mode===m?(C.mode==="dark"?"#0A0F1E":"#fff"):C.muted,transition:"all 0.15s"}}>{l}</button>
         ))}
       </div>
 
-      {mode==="register" && (
+      {/* Google OAuth button */}
+      <button onClick={loginWithGoogle} disabled={loading} style={{width:"100%",padding:"13px",borderRadius:12,border:`1.5px solid ${C.border}`,background:C.card,color:C.text,fontSize:14,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:16,transition:"all 0.15s"}}>
+        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+        Continue with Google
+      </button>
+
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <div style={{flex:1,height:1,background:C.border}}/>
+        <span style={{fontSize:12,color:C.muted,fontWeight:600}}>or</span>
+        <div style={{flex:1,height:1,background:C.border}}/>
+      </div>
+
+      {/* Register-only fields */}
+      {mode === "register" && (
         <>
           <div style={{display:"flex",gap:8,marginBottom:16}}>
             {[["driver","Driver"],["provider","Provider"]].map(([r,l])=>(
@@ -235,7 +380,7 @@ function AuthScreen({ onAuth }) {
 
       <Btn loading={loading} onClick={submit}>{mode==="login" ? "Sign In" : "Create Account"}</Btn>
 
-      {mode==="register" && role==="provider" && (
+      {mode === "register" && role === "provider" && (
         <div style={{marginTop:14,padding:"11px 13px",background:`${C.blue}10`,borderRadius:10,border:`1px solid ${C.blue}30`,fontSize:12,color:C.muted,display:"flex",gap:8,alignItems:"flex-start"}}>
           <Icon name="info" size={14} color={C.blue} style={{marginTop:1,flexShrink:0}}/>
           List your parking space and receive 80% of each booking directly via M-Pesa. ParkSmart takes 20% commission.
@@ -1978,6 +2123,139 @@ function DriverHome({ user, spots, loading, connected, walletBalance, onWalletCh
   );
 }
 
+// ─── PROVIDER MAP PICKER ──────────────────────────────────────────────────────
+// Lets provider pinpoint their parking location on a map instead of typing lat/lng
+function ProviderMapPicker({ lat, lng, onPick }) {
+  const C = useTheme();
+  const mapRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const markerRef = useRef(null);
+  const [ready, setReady] = useState(!!window.L);
+  const [geocoding, setGeocoding] = useState(false);
+  const [searchVal, setSearchVal] = useState("");
+  const hasPin = lat && lng;
+
+  useEffect(() => {
+    if (window.L) { setReady(true); return; }
+    loadLeaflet().then(() => setReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (!ready || !mapRef.current || mapInstanceRef.current) return;
+    const L = window.L;
+    const map = L.map(mapRef.current, {
+      center: [parseFloat(lat)||(-1.286389), parseFloat(lng)||(36.817223)],
+      zoom: 14, zoomControl: true, attributionControl: false,
+    });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom:19 }).addTo(map);
+    mapInstanceRef.current = map;
+
+    // Click on map to drop pin
+    map.on("click", async (e) => {
+      const { lat: clickLat, lng: clickLng } = e.latlng;
+      placePinAt(clickLat, clickLng);
+      // Reverse geocode to get address
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${clickLat}&lon=${clickLng}&format=json`);
+        const d = await r.json();
+        const addr = d.display_name?.split(",").slice(0,3).join(", ") || "";
+        onPick(parseFloat(clickLat.toFixed(6)), parseFloat(clickLng.toFixed(6)), addr);
+      } catch { onPick(parseFloat(clickLat.toFixed(6)), parseFloat(clickLng.toFixed(6)), ""); }
+    });
+  }, [ready]);
+
+  // Keep marker in sync with lat/lng prop
+  useEffect(() => {
+    if (!ready || !mapInstanceRef.current || !lat || !lng) return;
+    placePinAt(parseFloat(lat), parseFloat(lng));
+    mapInstanceRef.current.setView([parseFloat(lat), parseFloat(lng)], 16);
+  }, [ready, lat, lng]);
+
+  const placePinAt = (la, ln) => {
+    const L = window.L;
+    const map = mapInstanceRef.current;
+    if (!map) return;
+    const icon = L.divIcon({
+      className:"",
+      html:`<div style="width:32px;height:32px;background:#00E5A0;border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 4px 14px #00E5A080;"></div>`,
+      iconSize:[32,32], iconAnchor:[16,32],
+    });
+    if (markerRef.current) markerRef.current.setLatLng([la, ln]);
+    else markerRef.current = L.marker([la, ln], { icon, draggable: true }).addTo(map)
+      .on("dragend", async (e) => {
+        const pos = e.target.getLatLng();
+        try {
+          const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pos.lat}&lon=${pos.lng}&format=json`);
+          const d = await r.json();
+          const addr = d.display_name?.split(",").slice(0,3).join(", ") || "";
+          onPick(parseFloat(pos.lat.toFixed(6)), parseFloat(pos.lng.toFixed(6)), addr);
+        } catch { onPick(parseFloat(pos.lat.toFixed(6)), parseFloat(pos.lng.toFixed(6)), ""); }
+      });
+  };
+
+  const searchLocation = async () => {
+    if (!searchVal.trim()) return;
+    setGeocoding(true);
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchVal + ", Nairobi")}&format=json&limit=1`);
+      const results = await r.json();
+      if (results.length) {
+        const { lat: sLat, lon: sLng, display_name } = results[0];
+        onPick(parseFloat(parseFloat(sLat).toFixed(6)), parseFloat(parseFloat(sLng).toFixed(6)), display_name?.split(",").slice(0,3).join(", "));
+        mapInstanceRef.current?.setView([parseFloat(sLat), parseFloat(sLng)], 17);
+      }
+    } catch(e) {}
+    finally { setGeocoding(false); }
+  };
+
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{fontSize:11,color:C.muted,fontWeight:700,letterSpacing:0.8,textTransform:"uppercase",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+        <Icon name="map-pin" size={13} color={C.accent} strokeWidth={2.5}/>Pinpoint Location
+      </div>
+
+      {/* Search bar */}
+      <div style={{display:"flex",gap:6,marginBottom:8}}>
+        <input value={searchVal} onChange={e=>setSearchVal(e.target.value)} onKeyDown={e=>e.key==="Enter"&&searchLocation()}
+          placeholder="Search e.g. Sarit Centre, Westlands…"
+          style={{flex:1,background:C.inputBg,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"10px 12px",fontSize:13,color:C.text,outline:"none",fontFamily:"inherit"}}/>
+        <button onClick={searchLocation} disabled={geocoding} style={{padding:"10px 14px",background:C.accent,border:"none",borderRadius:10,color:C.mode==="dark"?"#0A0F1E":"#fff",fontWeight:700,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
+          {geocoding ? <div className="spin" style={{width:14,height:14,borderRadius:"50%",border:"2px solid #fff4",borderTop:"2px solid #fff"}}/> : <Icon name="search" size={14} color={C.mode==="dark"?"#0A0F1E":"#fff"} strokeWidth={2.5}/>}
+          Find
+        </button>
+      </div>
+
+      {/* Map */}
+      <div style={{position:"relative",borderRadius:14,overflow:"hidden",border:`1.5px solid ${hasPin?C.accent:C.border}`,marginBottom:8}}>
+        <div ref={mapRef} style={{width:"100%",height:200}}/>
+        {!ready && (
+          <div style={{position:"absolute",inset:0,background:C.card,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            <div className="spin" style={{width:28,height:28,borderRadius:"50%",border:`3px solid ${C.border}`,borderTop:`3px solid ${C.accent}`}}/>
+          </div>
+        )}
+        <div style={{position:"absolute",bottom:8,left:8,background:"#00000088",backdropFilter:"blur(8px)",borderRadius:7,padding:"4px 9px",fontSize:10,color:"#ccd",pointerEvents:"none"}}>
+          Tap map to drop pin · Drag pin to adjust
+        </div>
+      </div>
+
+      {/* Coordinates display */}
+      {hasPin ? (
+        <div style={{background:C.accentSoft,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"9px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{display:"flex",alignItems:"center",gap:7}}>
+            <Icon name="check-circle" size={15} color={C.accent} strokeWidth={2.5}/>
+            <span style={{fontSize:12,fontWeight:700,color:C.accent}}>Location pinned</span>
+          </div>
+          <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>{parseFloat(lat).toFixed(4)}, {parseFloat(lng).toFixed(4)}</span>
+        </div>
+      ) : (
+        <div style={{background:C.inputBg,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 12px",fontSize:12,color:C.muted,textAlign:"center"}}>
+          <Icon name="map-pin" size={13} color={C.muted} style={{marginRight:5}}/>Tap the map or search above to set your location
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── PROVIDER PORTAL ──────────────────────────────────────────────────────────
 function ProviderPortal({ user, onLogout }) {
   const C = useTheme();
@@ -2142,10 +2420,17 @@ function ProviderPortal({ user, onLogout }) {
             <ValidatedInput label="Location Name" name="businessName" placeholder="Westlands Square Parking" value={sform.name} onChange={e=>sf("name",e.target.value)}/>
             <Input label="Area / Neighbourhood" placeholder="Westlands" value={sform.area} onChange={e=>sf("area",e.target.value)}/>
             <Input label="Full Address" placeholder="Westlands Rd, Nairobi" value={sform.address} onChange={e=>sf("address",e.target.value)}/>
-            <div style={{display:"flex",gap:8}}>
-              <div style={{flex:1}}><ValidatedInput label="Latitude" name="lat" placeholder="-1.2676" type="number" value={sform.lat} onChange={e=>sf("lat",e.target.value)}/></div>
-              <div style={{flex:1}}><ValidatedInput label="Longitude" name="lng" placeholder="36.8116" type="number" value={sform.lng} onChange={e=>sf("lng",e.target.value)}/></div>
-            </div>
+
+            {/* Map Picker — replaces lat/lng text fields */}
+            <ProviderMapPicker
+              lat={sform.lat} lng={sform.lng}
+              onPick={(lat, lng, address) => {
+                sf("lat", String(lat));
+                sf("lng", String(lng));
+                if (address && !sform.address) sf("address", address);
+              }}
+            />
+
             <div style={{display:"flex",gap:8}}>
               <div style={{flex:1}}><ValidatedInput label="Total Spaces" name="spaces" placeholder="50" type="number" value={sform.totalSpaces} onChange={e=>sf("totalSpaces",e.target.value)}/></div>
               <div style={{flex:1}}><ValidatedInput label="Price/Hour (KES)" name="price" placeholder="150" type="number" value={sform.pricePerHour} onChange={e=>sf("pricePerHour",e.target.value)}/></div>
