@@ -618,6 +618,14 @@ function BookingModal({ spot, user, onClose, onSuccess, walletBalance, onWalletC
   const [spotNumber, setSpotNumber] = useState(null);
   const [step, setStep] = useState("form"); // form | wallet-confirm | paying
   const [error, setError] = useState("");
+  const [takenSpots, setTakenSpots] = useState([]); // real taken spot numbers from server
+
+  // Fetch which specific spot numbers are already taken when modal opens
+  useEffect(() => {
+    spotsApi.getTaken(spot.id)
+      .then(r => setTakenSpots(r.taken || []))
+      .catch(() => setTakenSpots([]));
+  }, [spot.id]);
 
   const hours = timeDiffHours(startTime, endTime);
   const total = Math.round((spot.price_per_hour||0) * hours);
@@ -812,7 +820,7 @@ function BookingModal({ spot, user, onClose, onSuccess, walletBalance, onWalletC
 
                 <ValidatedInput label="Vehicle Plate Number" name="plate" placeholder="e.g. KBX 123D" value={plate} onChange={e=>setPlate(e.target.value.toUpperCase())} style={{fontFamily:"monospace",letterSpacing:2,textTransform:"uppercase"}}/>
 
-                <SpotNumberPicker total={spot.total_spaces||20} available={avail} selected={spotNumber} onSelect={setSpotNumber} takenSpots={spot.taken_spots||[]}/>
+                <SpotNumberPicker total={spot.total_spaces||20} available={avail} selected={spotNumber} onSelect={setSpotNumber} takenSpots={takenSpots}/>
 
                 {/* Time picker */}
                 <div style={{marginBottom:14}}>
