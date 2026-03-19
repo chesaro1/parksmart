@@ -285,7 +285,7 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
     user_id: req.user.userId,
     provider_id: spot.provider_id,
     vehicle_plate: vehiclePlate.toUpperCase(),
-    hours: hoursFloat,           // ← fractional hours preserved
+    hours: hoursFloat,
     arrive_at: arriveAtISO,
     expires_at: expiresAt,
     total_amount: total,
@@ -295,6 +295,8 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
     spot_address: spot.address,
     spot_number: spotNumber || null,
     payment_method: paymentMethod || "M-Pesa",
+    // Wallet payments are instant — mark as paid immediately
+    payment_status: paymentMethod === "wallet" ? "paid" : "pending",
   }).select("*").single();
 
   if (error) {
@@ -389,8 +391,50 @@ app.post("/api/payments/mpesa/stkpush", requireAuth, authLimiter, async (req, re
   res.json({ CheckoutRequestID: checkoutId, ResponseCode: "0", ResponseDescription: "Success" });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// WALLET ROUTES — persisted in users.wallet_balance column
+// POST /api/payments/overstay — manual overstay payment trigger (fallback if STK auto-push fails)
+app.post("/api/payments/overstay", requireAuth, authLimiter, async (req, res) => {
+  const { overstayId, phone } = req.body;
+  if (!overstayId) return res.status(400).json({ error: "overstayId required" });
+
+  const { data: overstay } = await supabase.from("overstay_payments")
+    .select("*").eq("id", overstayId).eq("user_id", req.user.userId).single();
+  if (!overstay) return res.status(404).json({ error: "Overstay record not found" });
+  if (overstay.status === "paid") return res.status(400).json({ error: "Already paid" });
+
+  const payPhone = phone || (await supabase.from("users").select("phone").eq("id", req.user.userId).single()).data?.phone;
+  const checkoutId = "OS_CO_" + Date.now();
+
+  // Simulate M-Pesa STK push — replace with real Daraja in prod
+  setTimeout(async () => {
+    await supabase.from("overstay_payments")
+      .update({ status:"paid", checkout_id:checkoutId, paid_at:new Date().toISOString() })
+      .eq("id", overstayId);
+    await supabase.from("bookings")
+      .update({ status:"completed", updated_at:new Date().toISOString() })
+      .eq("id", overstay.booking_id);
+
+    // Restore space
+    const { data: spot } = await supabase.from("spots").select("available_spaces,total_spaces").eq("id", overstay.spot_id).single();
+    if (spot) {
+      const newAvail = Math.min(spot.total_spaces||999, (spot.available_spaces||0)+1);
+      await supabase.from("spots").update({ available_spaces: newAvail }).eq("id", overstay.spot_id);
+      await supabase.from("space_events").insert({ spot_id:overstay.spot_id, available_spaces:newAvail, event_type:"exit", triggered_by:"overstay-payment" });
+      io.emit("spot:updated", { spotId:overstay.spot_id, available:newAvail, total:spot.total_spaces });
+    }
+
+    // Signal gate to open
+    io.to(`scanner:${overstay.scanner_id}`).emit("gate:open", { plate:overstay.plate, overstayId, reason:"Overstay payment confirmed" });
+
+    // Notify user
+    io.to(`user:${overstay.user_id}`).emit("overstay:paid", {
+      overstayId, bookingId:overstay.booking_id,
+      minutes:overstay.minutes, charge:overstay.amount,
+      plate:overstay.plate,
+    });
+  }, 5000);
+
+  res.json({ CheckoutRequestID: checkoutId, ResponseCode: "0", message: `STK push sent to ${payPhone}` });
+});
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /api/wallet — returns current balance
@@ -627,40 +671,164 @@ async function processScan(scannerId, plate) {
   const timestamp = new Date().toISOString();
   if (!scanner) return { action:"deny", reason:"Unknown scanner ID", plate, scannerId, timestamp };
 
-  // Find valid booking
+  const cleanPlate = plate.toUpperCase().replace(/\s/g,"");
+
+  // 1. Look for a valid non-expired booking first
   const { data: booking } = await supabase.from("bookings")
     .select("*").eq("spot_id", scanner.spotId)
     .eq("payment_status","paid").eq("status","confirmed")
-    .ilike("vehicle_plate", plate.toUpperCase().replace(/\s/g,"") + "%")
+    .ilike("vehicle_plate", cleanPlate + "%")
     .gt("expires_at", timestamp).limit(1).single();
 
+  // 2. If no valid booking, check if there's an EXPIRED booking (overstay scenario)
+  let overstayBooking = null;
+  let overstayMinutes = 0;
+  let overstayCharge = 0;
+
+  if (!booking) {
+    const { data: expired } = await supabase.from("bookings")
+      .select("*").eq("spot_id", scanner.spotId)
+      .eq("payment_status","paid").eq("status","confirmed")
+      .ilike("vehicle_plate", cleanPlate + "%")
+      .lte("expires_at", timestamp).limit(1).single();
+
+    if (expired) {
+      overstayBooking = expired;
+      const expiredMs = new Date(expired.expires_at).getTime();
+      const nowMs = new Date(timestamp).getTime();
+      overstayMinutes = Math.ceil((nowMs - expiredMs) / 60000);
+
+      // Get spot price to calculate overstay fee
+      const { data: spotData } = await supabase.from("spots")
+        .select("price_per_hour").eq("id", scanner.spotId).single();
+      const ratePerMin = (spotData?.price_per_hour || 100) / 60;
+      overstayCharge = Math.ceil(overstayMinutes * ratePerMin);
+    }
+  }
+
   const { data: spot } = await supabase.from("spots").select("*").eq("id", scanner.spotId).single();
+
+  // Determine action
+  let action, reason;
+  if (booking) {
+    action = "open";
+    reason = "Valid booking";
+  } else if (overstayBooking && scanner.role === "exit") {
+    // Allow exit for overstay but flag it — charge will be collected
+    action = "open";
+    reason = `Overstay: ${overstayMinutes} min past booking. Charge: KES ${overstayCharge}`;
+  } else {
+    action = "deny";
+    reason = overstayBooking
+      ? `Session expired. Overstay: ${overstayMinutes} min. Pay KES ${overstayCharge} to exit.`
+      : "No valid booking found";
+  }
 
   const log = {
     scanner_id: scannerId, scanner_label: scanner.label,
     spot_id: scanner.spotId, spot_name: spot?.name || "Unknown",
-    plate: plate.toUpperCase(), action: booking ? "open" : "deny",
-    booking_id: booking?.id || null,
-    reason: booking ? "Valid booking" : "No valid booking",
+    plate: plate.toUpperCase(), action,
+    booking_id: booking?.id || overstayBooking?.id || null,
+    reason,
   };
   await supabase.from("scan_logs").insert(log);
   io.to("dashboard").emit("scan:event", { ...log, timestamp });
 
-  if (booking) {
-    if (scanner.role === "exit") {
-      await supabase.from("bookings").update({ status:"completed", updated_at:timestamp }).eq("id", booking.id);
-      // Restore the reserved space when car exits
-      const newAvail = Math.min((spot?.total_spaces||999), (spot?.available_spaces||0)+1);
-      await supabase.from("spots").update({ available_spaces: newAvail }).eq("id", scanner.spotId);
-      await supabase.from("space_events").insert({ spot_id:scanner.spotId, available_spaces:newAvail, event_type:"exit", triggered_by:scannerId });
-    }
-    io.to(`user:${booking.user_id}`).emit("gate:opened", { scannerId, spotName:spot?.name, plate, timestamp });
-    // Broadcast updated availability
+  const activeBooking = booking || overstayBooking;
+
+  if (booking && scanner.role === "exit") {
+    // ── Normal exit: valid booking, not expired ────────────────────────────────
+    await supabase.from("bookings")
+      .update({ status:"completed", updated_at:timestamp })
+      .eq("id", booking.id);
+    const newAvail = Math.min((spot?.total_spaces||999), (spot?.available_spaces||0)+1);
+    await supabase.from("spots").update({ available_spaces: newAvail }).eq("id", scanner.spotId);
+    await supabase.from("space_events").insert({ spot_id:scanner.spotId, available_spaces:newAvail, event_type:"exit", triggered_by:scannerId });
+    io.to(`user:${booking.user_id}`).emit("gate:opened", { scannerId, spotName:spot?.name, plate, timestamp, overstay:null });
     const { data: updatedSpot } = await supabase.from("spots").select("available_spaces,total_spaces").eq("id", scanner.spotId).single();
     if (updatedSpot) io.emit("spot:updated", { spotId:scanner.spotId, available:updatedSpot.available_spaces, total:updatedSpot.total_spaces });
+
+  } else if (overstayBooking && scanner.role === "exit") {
+    // ── Overstay exit: gate STAYS CLOSED — user must pay first via M-Pesa ─────
+    // Get user phone for STK push
+    const { data: overstayUser } = await supabase.from("users")
+      .select("phone, full_name").eq("id", overstayBooking.user_id).single();
+
+    // Store the pending overstay payment so we can open gate after confirmation
+    const overstayId = "OS-" + Date.now();
+    await supabase.from("overstay_payments").insert({
+      id: overstayId,
+      booking_id: overstayBooking.id,
+      user_id: overstayBooking.user_id,
+      spot_id: scanner.spotId,
+      scanner_id: scannerId,
+      plate: plate.toUpperCase(),
+      minutes: overstayMinutes,
+      amount: overstayCharge,
+      status: "pending",
+      created_at: timestamp,
+    }).select();
+
+    // Trigger STK push to user's phone automatically
+    if (overstayUser?.phone) {
+      const checkoutId = "OS_CO_" + Date.now();
+      // Fire M-Pesa STK push (simulate — replace with real Daraja in prod)
+      setTimeout(async () => {
+        // On payment success — open the gate and mark overstay paid
+        await supabase.from("overstay_payments")
+          .update({ status:"paid", checkout_id:checkoutId, paid_at:new Date().toISOString() })
+          .eq("id", overstayId);
+        await supabase.from("bookings")
+          .update({ status:"completed", updated_at:new Date().toISOString() })
+          .eq("id", overstayBooking.id);
+        const newAvail = Math.min((spot?.total_spaces||999), (spot?.available_spaces||0)+1);
+        await supabase.from("spots").update({ available_spaces: newAvail }).eq("id", scanner.spotId);
+        await supabase.from("space_events").insert({ spot_id:scanner.spotId, available_spaces:newAvail, event_type:"exit", triggered_by:scannerId });
+        const { data: updatedSpot } = await supabase.from("spots").select("available_spaces,total_spaces").eq("id", scanner.spotId).single();
+        if (updatedSpot) io.emit("spot:updated", { spotId:scanner.spotId, available:updatedSpot.available_spaces, total:updatedSpot.total_spaces });
+        // Signal gate hardware to open
+        io.to(`scanner:${scannerId}`).emit("gate:open", { plate, overstayId, reason:"Overstay payment confirmed" });
+        // Notify user — gate is now open
+        io.to(`user:${overstayBooking.user_id}`).emit("overstay:paid", {
+          overstayId, bookingId:overstayBooking.id,
+          minutes:overstayMinutes, charge:overstayCharge,
+          spotName:spot?.name, plate:plate.toUpperCase(),
+        });
+      }, 5000); // 5s simulated M-Pesa delay — replace with real callback in prod
+    }
+
+    // Notify user immediately: payment required, STK sent to their phone
+    io.to(`user:${overstayBooking.user_id}`).emit("overstay:payment_required", {
+      overstayId,
+      bookingId: overstayBooking.id,
+      minutes: overstayMinutes,
+      charge: overstayCharge,
+      spotName: spot?.name,
+      plate: plate.toUpperCase(),
+      phone: overstayUser?.phone || "",
+      message: `M-Pesa payment request sent to ${overstayUser?.phone}. Check your phone and enter your PIN.`,
+    });
+
+  } else if (overstayBooking && scanner.role !== "exit") {
+    // ── Entry scanner — alert user and deny ────────────────────────────────────
+    io.to(`user:${overstayBooking.user_id}`).emit("overstay:alert", {
+      bookingId: overstayBooking.id,
+      minutes: overstayMinutes,
+      charge: overstayCharge,
+      spotName: spot?.name,
+      plate: plate.toUpperCase(),
+    });
+  } else if (booking && scanner.role !== "exit") {
+    // ── Entry scan: valid booking — just notify ────────────────────────────────
+    io.to(`user:${booking.user_id}`).emit("gate:opened", { scannerId, spotName:spot?.name, plate, timestamp, overstay:null });
   }
 
-  return { action: booking?"open":"deny", booking, scanner, timestamp, reason: log.reason };
+  return {
+    action,
+    booking: activeBooking,
+    scanner, timestamp, reason,
+    overstay: overstayBooking ? { minutes:overstayMinutes, charge:overstayCharge } : null,
+  };
 }
 
 // Load scanners from DB on startup
