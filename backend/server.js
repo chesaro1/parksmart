@@ -173,25 +173,42 @@ app.get("/api/spots/:id", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.post("/api/bookings", requireAuth, async (req, res) => {
-  const { spotId, hours, arriveAt, startTime, endTime, vehiclePlate } = req.body;
+  const { spotId, hours, arriveAt, startTime, endTime, vehiclePlate, spotNumber, paymentMethod } = req.body;
   if (!spotId || !hours || !vehiclePlate)
     return res.status(400).json({ error: "spotId, hours, vehiclePlate required" });
 
+  // ── FIX 3: Atomic optimistic-lock decrement prevents double-booking ──────────
+  // First read the spot
   const { data: spot } = await supabase.from("spots").select("*").eq("id", spotId).single();
   if (!spot) return res.status(404).json({ error: "Spot not found" });
-  if (spot.available_spaces <= 0) return res.status(409).json({ error: "Spot is full" });
+  if (!spot.is_active || !spot.is_approved) return res.status(404).json({ error: "Spot not available" });
+  if (spot.available_spaces <= 0) return res.status(409).json({ error: "This spot is full. Please choose another." });
 
-  const total = spot.price_per_hour * parseInt(hours);
-  const commission = Math.round(total * 0.20); // 20% commission
-  const providerAmount = total - commission;    // 80% to provider
+  // Atomic decrement: only succeeds if available_spaces still equals what we read.
+  // If a concurrent request already decremented it, this update matches 0 rows → conflict.
+  const { data: claimed, error: claimErr } = await supabase
+    .from("spots")
+    .update({ available_spaces: spot.available_spaces - 1, updated_at: new Date().toISOString() })
+    .eq("id", spotId)
+    .eq("available_spaces", spot.available_spaces) // optimistic lock
+    .select("id,available_spaces,total_spaces")
+    .single();
 
-  // Resolve arrive_at from startTime (HH:MM) or arriveAt (ISO) or now
+  if (claimErr || !claimed) {
+    return res.status(409).json({ error: "This spot was just taken by someone else. Please refresh and try again." });
+  }
+
+  // ── FIX 1: Use parseFloat (not parseInt) so 1.5hr stays 1.5hr ───────────────
+  const hoursFloat = parseFloat(parseFloat(hours).toFixed(4));
+  const total = Math.round((spot.price_per_hour || 0) * hoursFloat);
+  const commission = Math.round(total * 0.20);
+  const providerAmount = total - commission;
+
   const resolveTime = (hhMM) => {
     if (!hhMM) return null;
     const [h, m] = hhMM.split(":").map(Number);
     const d = new Date();
     d.setHours(h, m, 0, 0);
-    // If the time has already passed today, push to tomorrow
     if (d.getTime() < Date.now() - 60000) d.setDate(d.getDate() + 1);
     return d.toISOString();
   };
@@ -199,16 +216,15 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
   const arriveAtISO = arriveAt || resolveTime(startTime) || new Date().toISOString();
   const arriveMs = new Date(arriveAtISO).getTime();
 
-  // expires_at = arrive_at + hours (not Date.now() + hours)
+  // expires_at uses hoursFloat — so a 90-min booking expires in exactly 90 minutes
   const expiresAt = endTime
     ? (() => {
         const iso = resolveTime(endTime);
-        // if endTime resolves to before arriveAt, it must be next day
         if (iso && new Date(iso).getTime() <= arriveMs)
-          return new Date(new Date(iso).getTime() + 24*3600000).toISOString();
-        return iso || new Date(arriveMs + parseInt(hours) * 3600000).toISOString();
+          return new Date(new Date(iso).getTime() + 24 * 3600000).toISOString();
+        return iso || new Date(arriveMs + hoursFloat * 3600000).toISOString();
       })()
-    : new Date(arriveMs + parseInt(hours) * 3600000).toISOString();
+    : new Date(arriveMs + hoursFloat * 3600000).toISOString();
 
   const bookingId = "PS-" + Math.floor(100000 + Math.random() * 900000);
 
@@ -218,7 +234,7 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
     user_id: req.user.userId,
     provider_id: spot.provider_id,
     vehicle_plate: vehiclePlate.toUpperCase(),
-    hours: parseInt(hours),
+    hours: hoursFloat,           // ← fractional hours preserved
     arrive_at: arriveAtISO,
     expires_at: expiresAt,
     total_amount: total,
@@ -226,17 +242,20 @@ app.post("/api/bookings", requireAuth, async (req, res) => {
     provider_amount: providerAmount,
     spot_name: spot.name,
     spot_address: spot.address,
+    spot_number: spotNumber || null,
+    payment_method: paymentMethod || "M-Pesa",
   }).select("*").single();
 
-  if (error) return res.status(500).json({ error: "Booking failed" });
+  if (error) {
+    // Rollback the claimed space so it's not lost
+    await supabase.from("spots")
+      .update({ available_spaces: spot.available_spaces, updated_at: new Date().toISOString() })
+      .eq("id", spotId);
+    return res.status(500).json({ error: "Booking failed. Your spot has been released." });
+  }
 
-  // Reserve the spot — decrement available_spaces immediately on booking
-  await supabase.from("spots")
-    .update({ available_spaces: Math.max(0, (spot.available_spaces || 0) - 1) })
-    .eq("id", spotId);
-
-  // Broadcast real-time update
-  io.emit("spot:updated", { spotId, available: Math.max(0, (spot.available_spaces || 0) - 1), total: spot.total_spaces });
+  // Broadcast real-time update to ALL clients immediately
+  io.emit("spot:updated", { spotId, available: claimed.available_spaces, total: claimed.total_spaces });
 
   res.status(201).json({ booking });
 });
@@ -581,8 +600,17 @@ setInterval(async () => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 io.on("connection", (socket) => {
+  // ── FIX 2: On every join (including reconnects) send a fresh spots snapshot ──
   socket.on("user:join", async (userId) => {
     socket.join(`user:${userId}`);
+    // Store userId on socket so we can re-send snapshot on reconnect
+    socket.data.userId = userId;
+    const { data: spots } = await supabase.from("spots").select("*").eq("is_active",true).eq("is_approved",true);
+    socket.emit("spots:snapshot", spots || []);
+  });
+
+  // Client can explicitly request a fresh snapshot (e.g. after coming back online)
+  socket.on("spots:request_snapshot", async () => {
     const { data: spots } = await supabase.from("spots").select("*").eq("is_active",true).eq("is_approved",true);
     socket.emit("spots:snapshot", spots || []);
   });
