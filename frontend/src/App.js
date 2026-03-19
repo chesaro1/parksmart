@@ -2295,13 +2295,43 @@ export default function App() {
 
   useEffect(() => {
     if (!user || user.role !== "driver") return;
-    spotsApi.getAll().then(d => { setSpots(d.spots||[]); setSpotsLoading(false); }).catch(() => setSpotsLoading(false));
+    // Initial spots loaded via socket spots:snapshot on connect.
+    // Fallback HTTP fetch fires if socket takes >4s.
+    const fallbackTimer = setTimeout(async () => {
+      try { const d = await spotsApi.getAll(); setSpots(d.spots||[]); setSpotsLoading(false); } catch(e) { setSpotsLoading(false); }
+    }, 4000);
     const socket = getSocket();
-    socket.on("connect", () => setConnected(true));
-    socket.on("disconnect", () => setConnected(false));
-    socket.on("spot:updated", ({ spotId, available }) => { setSpots(prev => prev.map(s => s.id===spotId ? {...s, available_spaces:available} : s)); });
-    socket.emit("user:join", user.id);
-    return () => { socket.off("connect"); socket.off("disconnect"); socket.off("spot:updated"); };
+    // FIX 2a: on connect (including reconnects), re-join and request fresh snapshot
+    const onConnect = () => {
+      setConnected(true);
+      socket.emit("user:join", user.id);
+    };
+    const onDisconnect = () => setConnected(false);
+    // FIX 2b: spots:snapshot replaces the full list (handles reconnects correctly)
+    const onSnapshot = (freshSpots) => {
+      setSpots(freshSpots);
+      setSpotsLoading(false);
+    };
+    // FIX 2c: spot:updated patches a single spot — now also updates total_spaces
+    const onSpotUpdated = ({ spotId, available, total }) => {
+      setSpots(prev => prev.map(s => s.id === spotId
+        ? { ...s, available_spaces: available, ...(total !== undefined ? { total_spaces: total } : {}) }
+        : s
+      ));
+    };
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.on("spots:snapshot", onSnapshot);
+    socket.on("spot:updated", onSpotUpdated);
+    // Join immediately (socket may already be connected)
+    if (socket.connected) onConnect();
+    return () => {
+      clearTimeout(fallbackTimer);
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.off("spots:snapshot", onSnapshot);
+      socket.off("spot:updated", onSpotUpdated);
+    };
   }, [user]);
 
   // Persist wallet balance to localStorage (fallback when API not ready)
