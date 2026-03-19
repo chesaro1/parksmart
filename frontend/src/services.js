@@ -32,6 +32,7 @@ export const authApi = {
 };
 export const spotsApi = {
   getAll: (p) => api.get("/api/spots", { params: p }).then(r => r.data),
+  getTaken: (id) => api.get(`/api/spots/${id}/taken`).then(r => r.data), // returns { taken: [2, 5, 7, ...] }
 };
 export const bookingsApi = {
   create: (d) => api.post("/api/bookings", d).then(r => r.data),
