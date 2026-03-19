@@ -238,37 +238,36 @@ function AuthScreen({ onAuth }) {
   const loginWithGoogle = async () => {
     setError(""); setLoading(true);
     try {
-      // Use Supabase client-side Google OAuth
-      const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
-      const sb = createClient(
-        process.env.REACT_APP_SUPABASE_URL || "https://cafyiswlagzksbxtiolx.supabase.co",
-        process.env.REACT_APP_SUPABASE_ANON_KEY || ""
-      );
-      const { data, error: oauthError } = await sb.auth.signInWithOAuth({
-        provider: "google",
-        options: { redirectTo: window.location.origin + "?oauth=google" }
-      });
-      if (oauthError) throw oauthError;
-      // OAuth redirects — handle on return in useEffect below
+      // Build the Supabase Google OAuth URL manually — no dynamic import needed
+      const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "https://cafyiswlagzksbxtiolx.supabase.co";
+      const redirectTo = encodeURIComponent(window.location.origin + "?oauth=google");
+      const oauthUrl = `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${redirectTo}`;
+      window.location.href = oauthUrl; // redirect to Google
     } catch(e) {
       setError("Google sign-in failed. Try email instead.");
       setLoading(false);
     }
   };
 
-  // Handle Google OAuth return
+  // Handle Google OAuth return — Supabase puts tokens in the URL hash
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get("oauth") !== "google") return;
-    const hash = window.location.hash;
-    const hashParams = new URLSearchParams(hash.replace("#",""));
+    // Supabase returns tokens in the hash fragment
+    const hashParams = new URLSearchParams(window.location.hash.replace("#", ""));
     const accessToken = hashParams.get("access_token");
-    if (!accessToken) return;
+    if (!accessToken) {
+      // Try query params as fallback
+      const qToken = params.get("access_token");
+      if (!qToken) { setError("Google sign-in failed. Please try again."); return; }
+    }
+    const token = accessToken || params.get("access_token");
+    // Clean URL
     window.history.replaceState({}, "", window.location.pathname);
-    authApi.google({ accessToken, role: "driver" }).then(data => {
-      localStorage.setItem("ps_token", data.token);
-      onAuth(data.user);
-    }).catch(() => setError("Google sign-in failed. Try email instead."));
+    setLoading(true);
+    authApi.google({ accessToken: token, role: "driver" })
+      .then(data => { localStorage.setItem("ps_token", data.token); onAuth(data.user); })
+      .catch(() => { setError("Google sign-in failed. Try email instead."); setLoading(false); });
   }, []);
 
   // ── OTP Screen ───────────────────────────────────────────────────────────────
